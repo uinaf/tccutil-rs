@@ -5,7 +5,7 @@
       "Bash(cargo test*)",
       "Bash(cargo fmt*)",
       "Bash(cargo clippy*)",
-      "Bash(tcc *)",
+      "Bash(tccutil-rs *)",
       "Read(*)",
       "Write(src/**)",
       "Write(tests/**)",

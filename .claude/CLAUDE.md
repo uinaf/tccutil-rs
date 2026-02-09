@@ -1,4 +1,4 @@
-# tcc-cli
+# tccutil-rs
 
 Rust CLI for managing macOS TCC (Transparency, Consent, and Control) privacy permissions databases. Replaces Apple's limited `tccutil` and the Python-based `tccutil.py` with a single static binary — no runtime dependencies.
 
@@ -18,11 +18,11 @@ macOS hides non-app-bundle clients (CLI tools, scripts) from the Privacy & Secur
 ## Build / Test / Install
 
 ```sh
-cargo build --release          # binary at target/release/tcc
+cargo build --release          # binary at target/release/tccutil-rs
 cargo test                     # unit + integration tests
 cargo clippy                   # lint
 cargo fmt                      # format
-cp target/release/tcc /opt/homebrew/bin/tcc  # install
+cp target/release/tccutil-rs /opt/homebrew/bin/tccutil-rs  # install
 ```
 
 ## Architecture

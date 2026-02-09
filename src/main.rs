@@ -11,7 +11,7 @@ use std::process;
 use tcc::{DbTarget, SERVICE_MAP, TccDb, TccEntry, auth_value_display, compact_client};
 
 #[derive(Parser, Debug)]
-#[command(name = "tcc", about = "Manage macOS TCC permissions", version)]
+#[command(name = "tccutil-rs", about = "Manage macOS TCC permissions", version)]
 struct Cli {
     /// Operate on user DB instead of system DB
     #[arg(short, long, global = true)]
