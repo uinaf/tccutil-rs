@@ -1,0 +1,13 @@
+[package]
+name = "tcc"
+version = "0.1.0"
+edition = "2024"
+description = "CLI tool for managing macOS TCC permissions"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+colored = "2"
+chrono = "0.4"
+dirs = "6"
+libc = "0.2"
