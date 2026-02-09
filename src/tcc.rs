@@ -89,7 +89,7 @@ impl TccDb {
         }
     }
 
-    fn format_timestamp(ts: i64) -> String {
+    pub(crate) fn format_timestamp(ts: i64) -> String {
         if ts == 0 {
             return "N/A".to_string();
         }
@@ -106,7 +106,7 @@ impl TccDb {
         }
     }
 
-    fn service_display_name(raw: &str) -> String {
+    pub(crate) fn service_display_name(raw: &str) -> String {
         SERVICE_MAP
             .get(raw)
             .map(|s| s.to_string())
@@ -584,5 +584,253 @@ pub fn compact_client(client: &str) -> String {
             .unwrap_or_else(|| client.to_string())
     } else {
         client.to_string()
+    }
+}
+
+/// Map auth_value to a display string (mirrors the logic in main.rs print_entries)
+pub fn auth_value_display(value: i32) -> String {
+    match value {
+        0 => "denied".to_string(),
+        2 => "granted".to_string(),
+        3 => "limited".to_string(),
+        v => format!("unknown({})", v),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Service name mapping ──────────────────────────────────────────
+
+    #[test]
+    fn known_service_keys_resolve_to_human_names() {
+        assert_eq!(
+            TccDb::service_display_name("kTCCServiceAccessibility"),
+            "Accessibility"
+        );
+        assert_eq!(
+            TccDb::service_display_name("kTCCServiceScreenCapture"),
+            "Screen Recording"
+        );
+        assert_eq!(
+            TccDb::service_display_name("kTCCServiceCamera"),
+            "Camera"
+        );
+        assert_eq!(
+            TccDb::service_display_name("kTCCServiceMicrophone"),
+            "Microphone"
+        );
+        assert_eq!(
+            TccDb::service_display_name("kTCCServiceSystemPolicyAllFiles"),
+            "Full Disk Access"
+        );
+        assert_eq!(
+            TccDb::service_display_name("kTCCServicePhotos"),
+            "Photos"
+        );
+    }
+
+    #[test]
+    fn unknown_service_key_with_prefix_strips_prefix() {
+        // Unknown key with kTCCService prefix should strip the prefix
+        assert_eq!(
+            TccDb::service_display_name("kTCCServiceSomethingNew"),
+            "SomethingNew"
+        );
+    }
+
+    #[test]
+    fn unknown_service_key_without_prefix_returns_raw() {
+        // Key without the standard prefix returns as-is
+        assert_eq!(
+            TccDb::service_display_name("com.example.custom"),
+            "com.example.custom"
+        );
+        assert_eq!(TccDb::service_display_name("FooBar"), "FooBar");
+    }
+
+    // ── Auth value display ────────────────────────────────────────────
+
+    #[test]
+    fn auth_value_denied() {
+        assert_eq!(auth_value_display(0), "denied");
+    }
+
+    #[test]
+    fn auth_value_granted() {
+        assert_eq!(auth_value_display(2), "granted");
+    }
+
+    #[test]
+    fn auth_value_limited() {
+        assert_eq!(auth_value_display(3), "limited");
+    }
+
+    #[test]
+    fn auth_value_unknown_values() {
+        assert_eq!(auth_value_display(1), "unknown(1)");
+        assert_eq!(auth_value_display(99), "unknown(99)");
+        assert_eq!(auth_value_display(-1), "unknown(-1)");
+    }
+
+    // ── Compact path display ──────────────────────────────────────────
+
+    #[test]
+    fn compact_client_extracts_binary_name_from_path() {
+        assert_eq!(
+            compact_client("/usr/local/bin/my-tool"),
+            "my-tool"
+        );
+        assert_eq!(
+            compact_client("/Applications/Safari.app/Contents/MacOS/Safari"),
+            "Safari"
+        );
+    }
+
+    #[test]
+    fn compact_client_returns_bundle_id_unchanged() {
+        assert_eq!(
+            compact_client("com.apple.Terminal"),
+            "com.apple.Terminal"
+        );
+        assert_eq!(
+            compact_client("org.mozilla.firefox"),
+            "org.mozilla.firefox"
+        );
+    }
+
+    #[test]
+    fn compact_client_root_path() {
+        // Edge case: root path "/"
+        assert_eq!(compact_client("/"), "/");
+    }
+
+    // ── Client/service filtering (partial match) ──────────────────────
+
+    #[test]
+    fn client_filter_partial_match() {
+        let entries = vec![
+            make_entry("kTCCServiceCamera", "com.apple.Terminal", 2),
+            make_entry("kTCCServiceMicrophone", "com.google.Chrome", 0),
+            make_entry("kTCCServiceCamera", "com.apple.Safari", 2),
+        ];
+
+        let filtered = filter_entries(entries, Some("apple"), None);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|e| e.client.contains("apple")));
+    }
+
+    #[test]
+    fn service_filter_partial_match_display_name() {
+        let entries = vec![
+            make_entry("kTCCServiceCamera", "com.app.a", 2),
+            make_entry("kTCCServiceMicrophone", "com.app.b", 0),
+            make_entry("kTCCServiceScreenCapture", "com.app.c", 2),
+        ];
+
+        // Matches "Camera" display name
+        let filtered = filter_entries(entries, None, Some("Camer"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].service_raw, "kTCCServiceCamera");
+    }
+
+    #[test]
+    fn service_filter_partial_match_raw_key() {
+        let entries = vec![
+            make_entry("kTCCServiceCamera", "com.app.a", 2),
+            make_entry("kTCCServiceMicrophone", "com.app.b", 0),
+        ];
+
+        // Matches raw key
+        let filtered = filter_entries(entries, None, Some("kTCCServiceMicro"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].service_raw, "kTCCServiceMicrophone");
+    }
+
+    #[test]
+    fn filter_case_insensitive() {
+        let entries = vec![
+            make_entry("kTCCServiceCamera", "com.Apple.Terminal", 2),
+        ];
+
+        let filtered = filter_entries(entries, Some("APPLE"), None);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn filter_no_match_returns_empty() {
+        let entries = vec![
+            make_entry("kTCCServiceCamera", "com.apple.Terminal", 2),
+        ];
+
+        let filtered = filter_entries(entries, Some("nonexistent"), None);
+        assert!(filtered.is_empty());
+    }
+
+    // ── SERVICE_MAP sanity ────────────────────────────────────────────
+
+    #[test]
+    fn service_map_contains_expected_entries() {
+        assert!(SERVICE_MAP.contains_key("kTCCServiceAccessibility"));
+        assert!(SERVICE_MAP.contains_key("kTCCServiceCamera"));
+        assert!(SERVICE_MAP.contains_key("kTCCServiceMicrophone"));
+        assert!(SERVICE_MAP.contains_key("kTCCServiceScreenCapture"));
+        assert!(SERVICE_MAP.len() > 20);
+    }
+
+    // ── Format timestamp ──────────────────────────────────────────────
+
+    #[test]
+    fn format_timestamp_zero_returns_na() {
+        assert_eq!(TccDb::format_timestamp(0), "N/A");
+    }
+
+    #[test]
+    fn format_timestamp_large_unix_value() {
+        // A recent Unix timestamp should produce a valid date
+        let result = TccDb::format_timestamp(1_700_000_000);
+        assert!(result.contains("2023"), "Expected 2023 in: {}", result);
+    }
+
+    #[test]
+    fn format_timestamp_coredata_value() {
+        // CoreData timestamp (seconds since 2001-01-01) — small value
+        // 700_000_000 + 978_307_200 = 1_678_307_200 → 2023
+        let result = TccDb::format_timestamp(700_000_000);
+        assert!(result.contains("2023") || result.contains("2024"), "Got: {}", result);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    fn make_entry(service_raw: &str, client: &str, auth_value: i32) -> TccEntry {
+        TccEntry {
+            service_raw: service_raw.to_string(),
+            service_display: TccDb::service_display_name(service_raw),
+            client: client.to_string(),
+            auth_value,
+            last_modified: "2024-01-01 00:00:00".to_string(),
+            is_system: false,
+        }
+    }
+
+    /// Applies the same filtering logic as TccDb::list
+    fn filter_entries(
+        mut entries: Vec<TccEntry>,
+        client_filter: Option<&str>,
+        service_filter: Option<&str>,
+    ) -> Vec<TccEntry> {
+        if let Some(cf) = client_filter {
+            let cf_lower = cf.to_lowercase();
+            entries.retain(|e| e.client.to_lowercase().contains(&cf_lower));
+        }
+        if let Some(sf) = service_filter {
+            let sf_lower = sf.to_lowercase();
+            entries.retain(|e| {
+                e.service_display.to_lowercase().contains(&sf_lower)
+                    || e.service_raw.to_lowercase().contains(&sf_lower)
+            });
+        }
+        entries
     }
 }

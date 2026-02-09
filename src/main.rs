@@ -1,6 +1,10 @@
 mod tcc;
 
 use clap::{Parser, Subcommand};
+#[cfg(test)]
+use clap::error::ErrorKind;
+#[cfg(test)]
+use clap::CommandFactory;
 use colored::Colorize;
 use std::process;
 
@@ -84,64 +88,258 @@ fn print_entries(entries: &[TccEntry], compact: bool) {
         entries.iter().map(|e| e.client.clone()).collect()
     };
 
-    let svc_width = entries
+    let hdr_svc = "SERVICE";
+    let hdr_client = "CLIENT";
+    let hdr_status = "STATUS";
+    let hdr_source = "SOURCE";
+    let hdr_modified = "LAST MODIFIED";
+
+    let svc_w = entries
         .iter()
         .map(|e| e.service_display.len())
         .max()
-        .unwrap_or(10)
-        .max(10);
-    let client_width = display_clients
+        .unwrap_or(0)
+        .max(hdr_svc.len());
+    let client_w = display_clients
         .iter()
         .map(|c| c.len())
         .max()
-        .unwrap_or(10)
-        .max(10);
+        .unwrap_or(0)
+        .max(hdr_client.len());
+    let status_w = entries
+        .iter()
+        .map(|e| match e.auth_value {
+            0 => "denied".len(),
+            2 => "granted".len(),
+            3 => "limited".len(),
+            v => format!("unknown({})", v).len(),
+        })
+        .max()
+        .unwrap_or(0)
+        .max(hdr_status.len());
+    let source_w = hdr_source.len();
+    let modified_w = entries
+        .iter()
+        .map(|e| e.last_modified.len())
+        .max()
+        .unwrap_or(0)
+        .max(hdr_modified.len());
 
     println!(
-        "{:<sw$}  {:<cw$}  {:<10}  {:<8}  {}",
-        "SERVICE",
-        "CLIENT",
-        "STATUS",
-        "SOURCE",
-        "LAST MODIFIED",
-        sw = svc_width,
-        cw = client_width,
+        "{:<sw$}  {:<cw$}  {:<stw$}  {:<srw$}  {}",
+        hdr_svc, hdr_client, hdr_status, hdr_source, hdr_modified,
+        sw = svc_w, cw = client_w, stw = status_w, srw = source_w,
     );
     println!(
-        "{:<sw$}  {:<cw$}  {:<10}  {:<8}  {}",
-        "─".repeat(svc_width),
-        "─".repeat(client_width),
-        "──────────",
-        "────────",
-        "─────────────",
-        sw = svc_width,
-        cw = client_width,
+        "{}  {}  {}  {}  {}",
+        "─".repeat(svc_w),
+        "─".repeat(client_w),
+        "─".repeat(status_w),
+        "─".repeat(source_w),
+        "─".repeat(modified_w),
     );
 
+    let mut prev_client: Option<&str> = None;
     for (entry, display_client) in entries.iter().zip(display_clients.iter()) {
-        let status_str = match entry.auth_value {
+        let status_plain = match entry.auth_value {
+            0 => "denied".to_string(),
+            2 => "granted".to_string(),
+            3 => "limited".to_string(),
+            v => format!("unknown({})", v),
+        };
+        let status_colored = match entry.auth_value {
             0 => "denied".red().to_string(),
             2 => "granted".green().to_string(),
             3 => "limited".yellow().to_string(),
             v => format!("unknown({})", v),
         };
+        // Pad based on visible length, then append the invisible ANSI tail
+        let status_pad = status_w.saturating_sub(status_plain.len());
+        let status_cell = format!("{}{}", status_colored, " ".repeat(status_pad));
+
+        let client_cell = if prev_client == Some(display_client.as_str()) {
+            "\u{2033}".to_string() // ″ double prime (ditto mark)
+        } else {
+            display_client.clone()
+        };
+        prev_client = Some(display_client.as_str());
 
         let source = if entry.is_system { "system" } else { "user" };
-        let modified = &entry.last_modified;
 
         println!(
-            "{:<sw$}  {:<cw$}  {:<10}  {:<8}  {}",
+            "{:<sw$}  {:<cw$}  {}  {:<srw$}  {}",
             entry.service_display,
-            display_client,
-            status_str,
+            client_cell,
+            status_cell,
             source,
-            modified,
-            sw = svc_width,
-            cw = client_width,
+            entry.last_modified,
+            sw = svc_w, cw = client_w, srw = source_w,
         );
     }
 
     println!("\n{} entries total", entries.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(args)
+    }
+
+    // ── Subcommand parsing ─────────────────────────────────────────
+
+    #[test]
+    fn parse_list_no_flags() {
+        let cli = parse(&["tcc", "list"]).unwrap();
+        assert!(matches!(cli.command, Commands::List { .. }));
+        assert!(!cli.user);
+    }
+
+    #[test]
+    fn parse_list_with_client_and_service_filter() {
+        let cli = parse(&["tcc", "list", "--client", "apple", "--service", "Camera"]).unwrap();
+        match cli.command {
+            Commands::List { client, service, compact } => {
+                assert_eq!(client.as_deref(), Some("apple"));
+                assert_eq!(service.as_deref(), Some("Camera"));
+                assert!(!compact);
+            }
+            _ => panic!("expected List"),
+        }
+    }
+
+    #[test]
+    fn parse_list_compact() {
+        let cli = parse(&["tcc", "list", "-c"]).unwrap();
+        match cli.command {
+            Commands::List { compact, .. } => assert!(compact),
+            _ => panic!("expected List"),
+        }
+    }
+
+    #[test]
+    fn parse_services() {
+        let cli = parse(&["tcc", "services"]).unwrap();
+        assert!(matches!(cli.command, Commands::Services));
+    }
+
+    #[test]
+    fn parse_info() {
+        let cli = parse(&["tcc", "info"]).unwrap();
+        assert!(matches!(cli.command, Commands::Info));
+    }
+
+    #[test]
+    fn parse_grant() {
+        let cli = parse(&["tcc", "grant", "Camera", "com.app.test"]).unwrap();
+        match cli.command {
+            Commands::Grant { service, client_path } => {
+                assert_eq!(service, "Camera");
+                assert_eq!(client_path, "com.app.test");
+            }
+            _ => panic!("expected Grant"),
+        }
+    }
+
+    #[test]
+    fn parse_revoke() {
+        let cli = parse(&["tcc", "revoke", "Camera", "com.app.test"]).unwrap();
+        match cli.command {
+            Commands::Revoke { service, client_path } => {
+                assert_eq!(service, "Camera");
+                assert_eq!(client_path, "com.app.test");
+            }
+            _ => panic!("expected Revoke"),
+        }
+    }
+
+    #[test]
+    fn parse_enable() {
+        let cli = parse(&["tcc", "enable", "Accessibility", "/usr/bin/foo"]).unwrap();
+        match cli.command {
+            Commands::Enable { service, client_path } => {
+                assert_eq!(service, "Accessibility");
+                assert_eq!(client_path, "/usr/bin/foo");
+            }
+            _ => panic!("expected Enable"),
+        }
+    }
+
+    #[test]
+    fn parse_disable() {
+        let cli = parse(&["tcc", "disable", "Microphone", "com.app.x"]).unwrap();
+        match cli.command {
+            Commands::Disable { service, client_path } => {
+                assert_eq!(service, "Microphone");
+                assert_eq!(client_path, "com.app.x");
+            }
+            _ => panic!("expected Disable"),
+        }
+    }
+
+    #[test]
+    fn parse_reset_with_client() {
+        let cli = parse(&["tcc", "reset", "Camera", "com.app.test"]).unwrap();
+        match cli.command {
+            Commands::Reset { service, client_path } => {
+                assert_eq!(service, "Camera");
+                assert_eq!(client_path.as_deref(), Some("com.app.test"));
+            }
+            _ => panic!("expected Reset"),
+        }
+    }
+
+    #[test]
+    fn parse_reset_without_client() {
+        let cli = parse(&["tcc", "reset", "Camera"]).unwrap();
+        match cli.command {
+            Commands::Reset { service, client_path } => {
+                assert_eq!(service, "Camera");
+                assert!(client_path.is_none());
+            }
+            _ => panic!("expected Reset"),
+        }
+    }
+
+    #[test]
+    fn parse_user_flag_global() {
+        let cli = parse(&["tcc", "--user", "list"]).unwrap();
+        assert!(cli.user);
+    }
+
+    #[test]
+    fn parse_user_flag_after_subcommand() {
+        let cli = parse(&["tcc", "list", "--user"]).unwrap();
+        assert!(cli.user);
+    }
+
+    // ── Error cases ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_no_subcommand_is_error() {
+        let err = parse(&["tcc"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand);
+    }
+
+    #[test]
+    fn parse_unknown_subcommand_is_error() {
+        let err = parse(&["tcc", "foobar"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn parse_grant_missing_args_is_error() {
+        let err = parse(&["tcc", "grant"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn cli_has_version() {
+        let cmd = Cli::command();
+        assert!(cmd.get_version().is_some());
+    }
 }
 
 fn main() {
