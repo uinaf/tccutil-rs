@@ -588,6 +588,7 @@ pub fn compact_client(client: &str) -> String {
 }
 
 /// Map auth_value to a display string (mirrors the logic in main.rs print_entries)
+#[cfg(test)]
 pub fn auth_value_display(value: i32) -> String {
     match value {
         0 => "denied".to_string(),
