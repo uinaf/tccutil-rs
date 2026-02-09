@@ -10,7 +10,7 @@ use std::process;
 
 use tcc::{compact_client, DbTarget, TccDb, TccEntry, SERVICE_MAP};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(name = "tcc", about = "Manage macOS TCC permissions", version)]
 struct Cli {
     /// Operate on user DB instead of system DB
@@ -21,7 +21,7 @@ struct Cli {
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Commands {
     /// List all TCC permissions
     List {
