@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build aarch64
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build x86_64
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            target/aarch64-apple-darwin/release/tccutil-rs \
+            target/x86_64-apple-darwin/release/tccutil-rs \
+            -output tccutil-rs-macos-universal
+          chmod +x tccutil-rs-macos-universal
+
+      - name: Prepare release assets
+        run: |
+          cp target/aarch64-apple-darwin/release/tccutil-rs tccutil-rs-macos-aarch64
+          cp target/x86_64-apple-darwin/release/tccutil-rs tccutil-rs-macos-x86_64
+          chmod +x tccutil-rs-macos-aarch64 tccutil-rs-macos-x86_64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            tccutil-rs-macos-universal
+            tccutil-rs-macos-aarch64
+            tccutil-rs-macos-x86_64
