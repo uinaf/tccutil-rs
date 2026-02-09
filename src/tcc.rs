@@ -1,7 +1,8 @@
 use chrono::{Local, TimeZone};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fmt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 
@@ -10,12 +11,18 @@ pub static SERVICE_MAP: LazyLock<HashMap<&'static str, &'static str>> = LazyLock
     m.insert("kTCCServiceAccessibility", "Accessibility");
     m.insert("kTCCServiceScreenCapture", "Screen Recording");
     m.insert("kTCCServiceSystemPolicyAllFiles", "Full Disk Access");
-    m.insert("kTCCServiceSystemPolicySysAdminFiles", "Administer Computer (SysAdmin)");
+    m.insert(
+        "kTCCServiceSystemPolicySysAdminFiles",
+        "Administer Computer (SysAdmin)",
+    );
     m.insert("kTCCServiceSystemPolicyDesktopFolder", "Desktop Folder");
     m.insert("kTCCServiceSystemPolicyDocumentsFolder", "Documents Folder");
     m.insert("kTCCServiceSystemPolicyDownloadsFolder", "Downloads Folder");
     m.insert("kTCCServiceSystemPolicyNetworkVolumes", "Network Volumes");
-    m.insert("kTCCServiceSystemPolicyRemovableVolumes", "Removable Volumes");
+    m.insert(
+        "kTCCServiceSystemPolicyRemovableVolumes",
+        "Removable Volumes",
+    );
     m.insert("kTCCServiceSystemPolicyDeveloperFiles", "Developer Files");
     m.insert("kTCCServiceCamera", "Camera");
     m.insert("kTCCServiceMicrophone", "Microphone");
@@ -56,6 +63,53 @@ const KNOWN_DIGESTS: &[&str] = &[
     "f773496775", // Sonoma (alt)
 ];
 
+#[derive(Debug)]
+pub enum TccError {
+    DbOpen { path: PathBuf, source: String },
+    NotFound { service: String, client: String },
+    NeedsRoot { message: String },
+    UnknownService(String),
+    AmbiguousService { input: String, matches: Vec<String> },
+    QueryFailed(String),
+    SchemaInvalid(String),
+    HomeDirNotFound,
+    WriteFailed(String),
+}
+
+impl fmt::Display for TccError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TccError::DbOpen { path, source } => {
+                write!(f, "Failed to open {}: {}", path.display(), source)
+            }
+            TccError::NotFound { service, client } => {
+                write!(
+                    f,
+                    "No entry found for service '{}' and client '{}'",
+                    service, client
+                )
+            }
+            TccError::NeedsRoot { message } => write!(f, "{}", message),
+            TccError::UnknownService(s) => write!(
+                f,
+                "Unknown service '{}'. Run `tcc services` to see available services.",
+                s
+            ),
+            TccError::AmbiguousService { input, matches } => write!(
+                f,
+                "Ambiguous service '{}'. Matches: {}",
+                input,
+                matches.join(", ")
+            ),
+            TccError::QueryFailed(s) => write!(f, "{}", s),
+            TccError::SchemaInvalid(s) => write!(f, "{}", s),
+            TccError::HomeDirNotFound => write!(f, "Cannot determine home directory"),
+            TccError::WriteFailed(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct TccEntry {
     pub service_raw: String,
     pub service_display: String,
@@ -80,11 +134,20 @@ pub struct TccDb {
 }
 
 impl TccDb {
-    pub fn new(target: DbTarget) -> Self {
-        let home = dirs::home_dir().expect("Cannot determine home directory");
-        Self {
+    pub fn new(target: DbTarget) -> Result<Self, TccError> {
+        let home = dirs::home_dir().ok_or(TccError::HomeDirNotFound)?;
+        Ok(Self {
             user_db_path: home.join("Library/Application Support/com.apple.TCC/TCC.db"),
             system_db_path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
+            target,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn with_paths(user: PathBuf, system: PathBuf, target: DbTarget) -> Self {
+        Self {
+            user_db_path: user,
+            system_db_path: system,
             target,
         }
     }
@@ -110,23 +173,24 @@ impl TccDb {
         SERVICE_MAP
             .get(raw)
             .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                raw.strip_prefix("kTCCService")
-                    .unwrap_or(raw)
-                    .to_string()
-            })
+            .unwrap_or_else(|| raw.strip_prefix("kTCCService").unwrap_or(raw).to_string())
     }
 
-    fn read_db(path: &PathBuf, is_system: bool) -> Result<Vec<TccEntry>, String> {
+    fn read_db(path: &Path, is_system: bool) -> Result<Vec<TccEntry>, TccError> {
         if !path.exists() {
             return Ok(vec![]);
         }
 
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
+        let conn =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
+                TccError::DbOpen {
+                    path: path.to_path_buf(),
+                    source: e.to_string(),
+                }
+            })?;
 
         let query = "SELECT service, client, auth_value, \
-                     COALESCE(last_modified, auth_reason, 0) as modified \
+                     COALESCE(last_modified, 0) as modified \
                      FROM access";
 
         let result = conn.prepare(query);
@@ -134,12 +198,13 @@ impl TccDb {
             Ok(s) => s,
             Err(_) => {
                 let fallback = "SELECT service, client, auth_value, 0 as modified FROM access";
-                conn.prepare(fallback)
-                    .map_err(|e| format!("Query failed on {}: {}", path.display(), e))?
+                conn.prepare(fallback).map_err(|e| {
+                    TccError::QueryFailed(format!("Query failed on {}: {}", path.display(), e))
+                })?
             }
         };
 
-        let entries = stmt
+        let rows = stmt
             .query_map([], |row| {
                 let service_raw: String = row.get(0)?;
                 let client: String = row.get(1)?;
@@ -155,9 +220,21 @@ impl TccDb {
                     is_system,
                 })
             })
-            .map_err(|e| format!("Query error on {}: {}", path.display(), e))?
-            .filter_map(|r| r.ok())
-            .collect();
+            .map_err(|e| {
+                TccError::QueryFailed(format!("Query error on {}: {}", path.display(), e))
+            })?;
+
+        let mut entries = Vec::new();
+        for result in rows {
+            match result {
+                Ok(entry) => entries.push(entry),
+                Err(e) => eprintln!(
+                    "Warning: skipping malformed row in {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
 
         Ok(entries)
     }
@@ -166,7 +243,7 @@ impl TccDb {
         &self,
         client_filter: Option<&str>,
         service_filter: Option<&str>,
-    ) -> Result<Vec<TccEntry>, String> {
+    ) -> Result<Vec<TccEntry>, TccError> {
         let mut entries = Vec::new();
 
         if self.target == DbTarget::Default || self.target == DbTarget::User {
@@ -204,29 +281,40 @@ impl TccDb {
         Ok(entries)
     }
 
-    pub fn resolve_service_name(&self, input: &str) -> Result<String, String> {
+    pub fn resolve_service_name(&self, input: &str) -> Result<String, TccError> {
         if SERVICE_MAP.contains_key(input) {
             return Ok(input.to_string());
         }
         let input_lower = input.to_lowercase();
+        // Exact display name match (case-insensitive)
         for (key, display) in SERVICE_MAP.iter() {
             if display.to_lowercase() == input_lower {
                 return Ok(key.to_string());
             }
         }
-        for (key, display) in SERVICE_MAP.iter() {
-            if display.to_lowercase().contains(&input_lower) {
-                return Ok(key.to_string());
+        // Partial display name match — collect all, error if ambiguous
+        let partial_matches: Vec<_> = SERVICE_MAP
+            .iter()
+            .filter(|(_, display)| display.to_lowercase().contains(&input_lower))
+            .collect();
+        match partial_matches.len() {
+            0 => {}
+            1 => return Ok(partial_matches[0].0.to_string()),
+            _ => {
+                let mut names: Vec<_> =
+                    partial_matches.iter().map(|(_, d)| d.to_string()).collect();
+                names.sort();
+                return Err(TccError::AmbiguousService {
+                    input: input.to_string(),
+                    matches: names,
+                });
             }
         }
         let prefixed = format!("kTCCService{}", input);
         if SERVICE_MAP.contains_key(prefixed.as_str()) {
             return Ok(prefixed);
         }
-        Err(format!(
-            "Unknown service '{}'. Run `tcc services` to see available services.",
-            input
-        ))
+        Err(TccError::UnknownService(input.to_string()))
     }
 
     fn is_system_service(service: &str) -> bool {
@@ -242,7 +330,7 @@ impl TccDb {
     }
 
     /// Determine the target DB path for a write operation
-    fn write_db_path(&self, service_key: &str) -> &PathBuf {
+    fn write_db_path(&self, service_key: &str) -> &Path {
         match self.target {
             DbTarget::User => &self.user_db_path,
             DbTarget::Default => {
@@ -256,23 +344,31 @@ impl TccDb {
     }
 
     /// Check if root is needed and we don't have it
-    fn check_root_for_write(&self, service_key: &str, action: &str, service_input: &str, client: &str) -> Result<(), String> {
+    fn check_root_for_write(
+        &self,
+        service_key: &str,
+        action: &str,
+        service_input: &str,
+        client: &str,
+    ) -> Result<(), TccError> {
         let db_path = self.write_db_path(service_key);
-        if db_path == &self.system_db_path && !nix_is_root() {
-            return Err(format!(
-                "Service '{}' requires the system TCC database.\n\
-                 Run with sudo: sudo tcc {} {} {}",
-                Self::service_display_name(service_key),
-                action,
-                service_input,
-                client
-            ));
+        if db_path == self.system_db_path && !nix_is_root() {
+            return Err(TccError::NeedsRoot {
+                message: format!(
+                    "Service '{}' requires the system TCC database.\n\
+                     Run with sudo: sudo tcc {} {} {}",
+                    Self::service_display_name(service_key),
+                    action,
+                    service_input,
+                    client
+                ),
+            });
         }
         Ok(())
     }
 
     /// Validate the DB schema before writing. Returns Ok with an optional warning.
-    fn validate_schema(conn: &Connection) -> Result<Option<String>, String> {
+    fn validate_schema(conn: &Connection) -> Result<Option<String>, TccError> {
         let digest: Option<String> = conn
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE name='access' AND type='table'",
@@ -296,20 +392,24 @@ impl TccDb {
                 )))
             }
         } else {
-            Err("Could not read TCC database schema. The access table may not exist.".to_string())
+            Err(TccError::SchemaInvalid(
+                "Could not read TCC database schema. The access table may not exist.".to_string(),
+            ))
         }
     }
 
     /// Open a writable connection with schema validation
-    fn open_writable(&self, service_key: &str) -> Result<(Connection, Option<String>), String> {
+    fn open_writable(&self, service_key: &str) -> Result<(Connection, Option<String>), TccError> {
         let db_path = self.write_db_path(service_key);
-        let conn = Connection::open(db_path)
-            .map_err(|e| format!("Failed to open {}: {}", db_path.display(), e))?;
+        let conn = Connection::open(db_path).map_err(|e| TccError::DbOpen {
+            path: db_path.to_path_buf(),
+            source: e.to_string(),
+        })?;
         let warning = Self::validate_schema(&conn)?;
         Ok((conn, warning))
     }
 
-    pub fn grant(&self, service: &str, client: &str) -> Result<String, String> {
+    pub fn grant(&self, service: &str, client: &str) -> Result<String, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "grant", service, client)?;
 
@@ -318,13 +418,22 @@ impl TccDb {
             eprintln!("{}", w);
         }
 
+        let client_type: i32 = if client.starts_with('/') { 0 } else { 1 };
         let now = chrono::Utc::now().timestamp() - 978_307_200;
         let sql = "INSERT OR REPLACE INTO access \
                    (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) \
-                   VALUES (?1, ?2, 0, 2, 0, 1, 0, ?3)";
+                   VALUES (?1, ?2, ?3, 2, 0, 1, 0, ?4)";
 
-        conn.execute(sql, rusqlite::params![service_key, client, now])
-            .map_err(|e| format!("Failed to grant: {}. Note: SIP may prevent TCC.db writes on macOS 10.14+", e))?;
+        conn.execute(
+            sql,
+            rusqlite::params![service_key, client, client_type, now],
+        )
+        .map_err(|e| {
+            TccError::WriteFailed(format!(
+                "Failed to grant: {}. Note: SIP may prevent TCC.db writes on macOS 10.14+",
+                e
+            ))
+        })?;
 
         Ok(format!(
             "Granted {} access for '{}'",
@@ -333,7 +442,7 @@ impl TccDb {
         ))
     }
 
-    pub fn revoke(&self, service: &str, client: &str) -> Result<String, String> {
+    pub fn revoke(&self, service: &str, client: &str) -> Result<String, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "revoke", service, client)?;
 
@@ -347,14 +456,18 @@ impl TccDb {
                 "DELETE FROM access WHERE service = ?1 AND client = ?2",
                 rusqlite::params![service_key, client],
             )
-            .map_err(|e| format!("Failed to revoke: {}. Note: SIP may prevent TCC.db writes.", e))?;
+            .map_err(|e| {
+                TccError::WriteFailed(format!(
+                    "Failed to revoke: {}. Note: SIP may prevent TCC.db writes.",
+                    e
+                ))
+            })?;
 
         if deleted == 0 {
-            Err(format!(
-                "No entry found for service '{}' and client '{}'",
-                Self::service_display_name(&service_key),
-                client
-            ))
+            Err(TccError::NotFound {
+                service: Self::service_display_name(&service_key),
+                client: client.to_string(),
+            })
         } else {
             Ok(format!(
                 "Revoked {} access for '{}'",
@@ -364,7 +477,7 @@ impl TccDb {
         }
     }
 
-    pub fn enable(&self, service: &str, client: &str) -> Result<String, String> {
+    pub fn enable(&self, service: &str, client: &str) -> Result<String, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "enable", service, client)?;
 
@@ -373,19 +486,27 @@ impl TccDb {
             eprintln!("{}", w);
         }
 
+        let now = chrono::Utc::now().timestamp() - 978_307_200;
         let updated = conn
             .execute(
-                "UPDATE access SET auth_value = 2 WHERE service = ?1 AND client = ?2",
-                rusqlite::params![service_key, client],
+                "UPDATE access SET auth_value = 2, last_modified = ?3 WHERE service = ?1 AND client = ?2",
+                rusqlite::params![service_key, client, now],
             )
-            .map_err(|e| format!("Failed to enable: {}. Note: SIP may prevent TCC.db writes.", e))?;
+            .map_err(|e| {
+                TccError::WriteFailed(format!(
+                    "Failed to enable: {}. Note: SIP may prevent TCC.db writes.",
+                    e
+                ))
+            })?;
 
         if updated == 0 {
-            Err(format!(
-                "No existing entry found for service '{}' and client '{}'. Use `tcc grant` to insert a new entry.",
-                Self::service_display_name(&service_key),
-                client
-            ))
+            Err(TccError::NotFound {
+                service: format!(
+                    "{}. Use `tcc grant` to insert a new entry",
+                    Self::service_display_name(&service_key)
+                ),
+                client: client.to_string(),
+            })
         } else {
             Ok(format!(
                 "Enabled {} access for '{}'",
@@ -395,7 +516,7 @@ impl TccDb {
         }
     }
 
-    pub fn disable(&self, service: &str, client: &str) -> Result<String, String> {
+    pub fn disable(&self, service: &str, client: &str) -> Result<String, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "disable", service, client)?;
 
@@ -404,19 +525,24 @@ impl TccDb {
             eprintln!("{}", w);
         }
 
+        let now = chrono::Utc::now().timestamp() - 978_307_200;
         let updated = conn
             .execute(
-                "UPDATE access SET auth_value = 0 WHERE service = ?1 AND client = ?2",
-                rusqlite::params![service_key, client],
+                "UPDATE access SET auth_value = 0, last_modified = ?3 WHERE service = ?1 AND client = ?2",
+                rusqlite::params![service_key, client, now],
             )
-            .map_err(|e| format!("Failed to disable: {}. Note: SIP may prevent TCC.db writes.", e))?;
+            .map_err(|e| {
+                TccError::WriteFailed(format!(
+                    "Failed to disable: {}. Note: SIP may prevent TCC.db writes.",
+                    e
+                ))
+            })?;
 
         if updated == 0 {
-            Err(format!(
-                "No existing entry found for service '{}' and client '{}'.",
-                Self::service_display_name(&service_key),
-                client
-            ))
+            Err(TccError::NotFound {
+                service: Self::service_display_name(&service_key),
+                client: client.to_string(),
+            })
         } else {
             Ok(format!(
                 "Disabled {} access for '{}'",
@@ -426,7 +552,7 @@ impl TccDb {
         }
     }
 
-    pub fn reset(&self, service: &str, client: Option<&str>) -> Result<String, String> {
+    pub fn reset(&self, service: &str, client: Option<&str>) -> Result<String, TccError> {
         let service_key = self.resolve_service_name(service)?;
 
         if let Some(c) = client {
@@ -443,14 +569,13 @@ impl TccDb {
                     "DELETE FROM access WHERE service = ?1 AND client = ?2",
                     rusqlite::params![service_key, c],
                 )
-                .map_err(|e| format!("Failed to reset: {}", e))?;
+                .map_err(|e| TccError::WriteFailed(format!("Failed to reset: {}", e)))?;
 
             if deleted == 0 {
-                Err(format!(
-                    "No entry found for service '{}' and client '{}'",
-                    Self::service_display_name(&service_key),
-                    c
-                ))
+                Err(TccError::NotFound {
+                    service: Self::service_display_name(&service_key),
+                    client: c.to_string(),
+                })
             } else {
                 Ok(format!(
                     "Reset {} entry for '{}'",
@@ -464,7 +589,7 @@ impl TccDb {
             let mut total_deleted = 0usize;
             let mut errors = Vec::new();
 
-            let paths: Vec<(&PathBuf, &str)> = match self.target {
+            let paths: Vec<(&Path, &str)> = match self.target {
                 DbTarget::User => vec![(&self.user_db_path, "user")],
                 DbTarget::Default => vec![
                     (&self.user_db_path, "user"),
@@ -476,8 +601,23 @@ impl TccDb {
                 if !db_path.exists() {
                     continue;
                 }
+                // Check root for system DB writes
+                if db_path == self.system_db_path && !nix_is_root() {
+                    return Err(TccError::NeedsRoot {
+                        message: format!(
+                            "Resetting all '{}' entries requires the system TCC database.\n\
+                             Run with sudo: sudo tcc reset {}",
+                            Self::service_display_name(&service_key),
+                            service
+                        ),
+                    });
+                }
                 match Connection::open(db_path) {
                     Ok(conn) => {
+                        if let Err(e) = Self::validate_schema(&conn) {
+                            errors.push(format!("{} DB: {}", label, e));
+                            continue;
+                        }
                         match conn.execute(
                             "DELETE FROM access WHERE service = ?1",
                             rusqlite::params![service_key],
@@ -491,7 +631,10 @@ impl TccDb {
             }
 
             if total_deleted == 0 && !errors.is_empty() {
-                Err(format!("Failed to reset: {}", errors.join("; ")))
+                Err(TccError::WriteFailed(format!(
+                    "Failed to reset: {}",
+                    errors.join("; ")
+                )))
             } else {
                 let mut msg = format!(
                     "Reset all {} entries ({} deleted)",
@@ -506,23 +649,19 @@ impl TccDb {
         }
     }
 
-    pub fn info() -> Vec<String> {
-        let home = dirs::home_dir().expect("Cannot determine home directory");
-        let user_path = home.join("Library/Application Support/com.apple.TCC/TCC.db");
-        let system_path = PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db");
-
+    pub fn info(&self) -> Vec<String> {
         let mut lines = Vec::new();
 
-        // macOS version
-        let macos_ver = Command::new("sw_vers")
+        // macOS version — use absolute path for defensive coding
+        let macos_ver = Command::new("/usr/bin/sw_vers")
             .arg("-productVersion")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
         lines.push(format!("macOS version: {}", macos_ver));
 
-        // SIP status
-        let sip = Command::new("csrutil")
+        // SIP status — use absolute path for defensive coding
+        let sip = Command::new("/usr/bin/csrutil")
             .arg("status")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -531,34 +670,46 @@ impl TccDb {
 
         lines.push(String::new());
 
-        // DB info helper
-        for (label, path) in [("User DB", &user_path), ("System DB", &system_path)] {
+        // DB info
+        for (label, path) in [
+            ("User DB", &self.user_db_path),
+            ("System DB", &self.system_db_path),
+        ] {
             lines.push(format!("{}: {}", label, path.display()));
             if path.exists() {
-                let readable = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).is_ok();
-                let writable = Connection::open_with_flags(
-                    path,
-                    OpenFlags::SQLITE_OPEN_READ_WRITE,
-                ).is_ok();
-                lines.push(format!("  Readable: {}", if readable { "yes" } else { "no" }));
-                lines.push(format!("  Writable: {}", if writable { "yes" } else { "no" }));
+                let readable =
+                    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).is_ok();
+                let writable =
+                    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).is_ok();
+                lines.push(format!(
+                    "  Readable: {}",
+                    if readable { "yes" } else { "no" }
+                ));
+                lines.push(format!(
+                    "  Writable: {}",
+                    if writable { "yes" } else { "no" }
+                ));
 
                 // Schema digest
-                if readable {
-                    if let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-                        if let Ok(sql) = conn.query_row::<String, _, _>(
-                            "SELECT sql FROM sqlite_master WHERE name='access' AND type='table'",
-                            [],
-                            |row| row.get(0),
-                        ) {
-                            let mut hasher = sha1_smol::Sha1::new();
-                            hasher.update(sql.as_bytes());
-                            let hex = hasher.digest().to_string();
-                            let short = &hex[..10];
-                            let known = if KNOWN_DIGESTS.contains(&short) { "known" } else { "UNKNOWN" };
-                            lines.push(format!("  Schema digest: {} ({})", short, known));
-                        }
-                    }
+                if readable
+                    && let Ok(conn) =
+                        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    && let Ok(sql) = conn.query_row::<String, _, _>(
+                        "SELECT sql FROM sqlite_master WHERE name='access' AND type='table'",
+                        [],
+                        |row| row.get(0),
+                    )
+                {
+                    let mut hasher = sha1_smol::Sha1::new();
+                    hasher.update(sql.as_bytes());
+                    let hex = hasher.digest().to_string();
+                    let short = &hex[..10];
+                    let known = if KNOWN_DIGESTS.contains(&short) {
+                        "known"
+                    } else {
+                        "UNKNOWN"
+                    };
+                    lines.push(format!("  Schema digest: {} ({})", short, known));
                 }
             } else {
                 lines.push("  Not found".to_string());
@@ -587,8 +738,7 @@ pub fn compact_client(client: &str) -> String {
     }
 }
 
-/// Map auth_value to a display string (mirrors the logic in main.rs print_entries)
-#[cfg(test)]
+/// Map auth_value to a display string
 pub fn auth_value_display(value: i32) -> String {
     match value {
         0 => "denied".to_string(),
@@ -614,10 +764,7 @@ mod tests {
             TccDb::service_display_name("kTCCServiceScreenCapture"),
             "Screen Recording"
         );
-        assert_eq!(
-            TccDb::service_display_name("kTCCServiceCamera"),
-            "Camera"
-        );
+        assert_eq!(TccDb::service_display_name("kTCCServiceCamera"), "Camera");
         assert_eq!(
             TccDb::service_display_name("kTCCServiceMicrophone"),
             "Microphone"
@@ -626,10 +773,7 @@ mod tests {
             TccDb::service_display_name("kTCCServiceSystemPolicyAllFiles"),
             "Full Disk Access"
         );
-        assert_eq!(
-            TccDb::service_display_name("kTCCServicePhotos"),
-            "Photos"
-        );
+        assert_eq!(TccDb::service_display_name("kTCCServicePhotos"), "Photos");
     }
 
     #[test]
@@ -679,10 +823,7 @@ mod tests {
 
     #[test]
     fn compact_client_extracts_binary_name_from_path() {
-        assert_eq!(
-            compact_client("/usr/local/bin/my-tool"),
-            "my-tool"
-        );
+        assert_eq!(compact_client("/usr/local/bin/my-tool"), "my-tool");
         assert_eq!(
             compact_client("/Applications/Safari.app/Contents/MacOS/Safari"),
             "Safari"
@@ -691,14 +832,8 @@ mod tests {
 
     #[test]
     fn compact_client_returns_bundle_id_unchanged() {
-        assert_eq!(
-            compact_client("com.apple.Terminal"),
-            "com.apple.Terminal"
-        );
-        assert_eq!(
-            compact_client("org.mozilla.firefox"),
-            "org.mozilla.firefox"
-        );
+        assert_eq!(compact_client("com.apple.Terminal"), "com.apple.Terminal");
+        assert_eq!(compact_client("org.mozilla.firefox"), "org.mozilla.firefox");
     }
 
     #[test]
@@ -751,9 +886,7 @@ mod tests {
 
     #[test]
     fn filter_case_insensitive() {
-        let entries = vec![
-            make_entry("kTCCServiceCamera", "com.Apple.Terminal", 2),
-        ];
+        let entries = vec![make_entry("kTCCServiceCamera", "com.Apple.Terminal", 2)];
 
         let filtered = filter_entries(entries, Some("APPLE"), None);
         assert_eq!(filtered.len(), 1);
@@ -761,9 +894,7 @@ mod tests {
 
     #[test]
     fn filter_no_match_returns_empty() {
-        let entries = vec![
-            make_entry("kTCCServiceCamera", "com.apple.Terminal", 2),
-        ];
+        let entries = vec![make_entry("kTCCServiceCamera", "com.apple.Terminal", 2)];
 
         let filtered = filter_entries(entries, Some("nonexistent"), None);
         assert!(filtered.is_empty());
@@ -799,7 +930,11 @@ mod tests {
         // CoreData timestamp (seconds since 2001-01-01) — small value
         // 700_000_000 + 978_307_200 = 1_678_307_200 → 2023
         let result = TccDb::format_timestamp(700_000_000);
-        assert!(result.contains("2023") || result.contains("2024"), "Got: {}", result);
+        assert!(
+            result.contains("2023") || result.contains("2024"),
+            "Got: {}",
+            result
+        );
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
@@ -833,5 +968,234 @@ mod tests {
             });
         }
         entries
+    }
+
+    // ── Resolve service name ──────────────────────────────────────────
+
+    fn make_test_db() -> TccDb {
+        TccDb::with_paths(
+            PathBuf::from("/nonexistent/user.db"),
+            PathBuf::from("/nonexistent/system.db"),
+            DbTarget::User,
+        )
+    }
+
+    #[test]
+    fn resolve_exact_key() {
+        let db = make_test_db();
+        assert_eq!(
+            db.resolve_service_name("kTCCServiceCamera").unwrap(),
+            "kTCCServiceCamera"
+        );
+    }
+
+    #[test]
+    fn resolve_display_name() {
+        let db = make_test_db();
+        assert_eq!(
+            db.resolve_service_name("Camera").unwrap(),
+            "kTCCServiceCamera"
+        );
+    }
+
+    #[test]
+    fn resolve_case_insensitive() {
+        let db = make_test_db();
+        assert_eq!(
+            db.resolve_service_name("camera").unwrap(),
+            "kTCCServiceCamera"
+        );
+    }
+
+    #[test]
+    fn resolve_ambiguous_errors() {
+        let db = make_test_db();
+        // "Photo" matches both "Photos" and "Photos (Add Only)"
+        let err = db.resolve_service_name("Photo").unwrap_err();
+        assert!(
+            matches!(err, TccError::AmbiguousService { .. }),
+            "Expected AmbiguousService, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn resolve_unknown_errors() {
+        let db = make_test_db();
+        let err = db.resolve_service_name("NonexistentService").unwrap_err();
+        assert!(matches!(err, TccError::UnknownService(_)));
+    }
+
+    #[test]
+    fn resolve_short_name_via_prefix() {
+        let db = make_test_db();
+        assert_eq!(
+            db.resolve_service_name("BluetoothAlways").unwrap(),
+            "kTCCServiceBluetoothAlways"
+        );
+    }
+
+    // ── Write operation tests (temp DB) ───────────────────────────────
+
+    fn make_temp_tcc_db() -> (tempfile::TempDir, TccDb) {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let db_path = dir.path().join("TCC.db");
+
+        let conn = Connection::open(&db_path).expect("failed to create temp db");
+        conn.execute_batch(
+            "CREATE TABLE access (
+                service TEXT NOT NULL,
+                client TEXT NOT NULL,
+                client_type INTEGER NOT NULL,
+                auth_value INTEGER NOT NULL DEFAULT 0,
+                auth_reason INTEGER NOT NULL DEFAULT 0,
+                auth_version INTEGER NOT NULL DEFAULT 1,
+                flags INTEGER NOT NULL DEFAULT 0,
+                last_modified INTEGER DEFAULT 0,
+                PRIMARY KEY (service, client, client_type)
+            );",
+        )
+        .expect("failed to create table");
+        drop(conn);
+
+        let db = TccDb::with_paths(db_path, dir.path().join("system_TCC.db"), DbTarget::User);
+
+        (dir, db)
+    }
+
+    #[test]
+    fn grant_inserts_entry() {
+        let (_dir, db) = make_temp_tcc_db();
+        let result = db.grant("Camera", "com.example.app");
+        assert!(result.is_ok(), "grant failed: {:?}", result.err());
+        assert!(result.unwrap().contains("Granted"));
+
+        let entries = db.list(None, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].service_raw, "kTCCServiceCamera");
+        assert_eq!(entries[0].client, "com.example.app");
+        assert_eq!(entries[0].auth_value, 2);
+    }
+
+    #[test]
+    fn grant_sets_client_type_for_path() {
+        let (_dir, db) = make_temp_tcc_db();
+        db.grant("Camera", "/usr/bin/test").unwrap();
+
+        let conn = Connection::open(&db.user_db_path).unwrap();
+        let client_type: i32 = conn
+            .query_row(
+                "SELECT client_type FROM access WHERE client = '/usr/bin/test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(client_type, 0, "Path client should have client_type 0");
+    }
+
+    #[test]
+    fn grant_sets_client_type_for_bundle_id() {
+        let (_dir, db) = make_temp_tcc_db();
+        db.grant("Camera", "com.example.app").unwrap();
+
+        let conn = Connection::open(&db.user_db_path).unwrap();
+        let client_type: i32 = conn
+            .query_row(
+                "SELECT client_type FROM access WHERE client = 'com.example.app'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(client_type, 1, "Bundle ID should have client_type 1");
+    }
+
+    #[test]
+    fn revoke_removes_entry() {
+        let (_dir, db) = make_temp_tcc_db();
+        db.grant("Camera", "com.example.app").unwrap();
+
+        let result = db.revoke("Camera", "com.example.app");
+        assert!(result.is_ok());
+
+        let entries = db.list(None, None).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn revoke_nonexistent_returns_not_found() {
+        let (_dir, db) = make_temp_tcc_db();
+        let result = db.revoke("Camera", "com.nonexistent.app");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TccError::NotFound { .. }));
+    }
+
+    #[test]
+    fn enable_sets_auth_value_to_granted() {
+        let (_dir, db) = make_temp_tcc_db();
+        db.grant("Camera", "com.example.app").unwrap();
+        db.disable("Camera", "com.example.app").unwrap();
+
+        let entries = db.list(None, None).unwrap();
+        assert_eq!(entries[0].auth_value, 0);
+
+        db.enable("Camera", "com.example.app").unwrap();
+        let entries = db.list(None, None).unwrap();
+        assert_eq!(entries[0].auth_value, 2);
+    }
+
+    #[test]
+    fn disable_sets_auth_value_to_denied() {
+        let (_dir, db) = make_temp_tcc_db();
+        db.grant("Camera", "com.example.app").unwrap();
+
+        db.disable("Camera", "com.example.app").unwrap();
+        let entries = db.list(None, None).unwrap();
+        assert_eq!(entries[0].auth_value, 0);
+    }
+
+    #[test]
+    fn enable_nonexistent_returns_not_found() {
+        let (_dir, db) = make_temp_tcc_db();
+        let result = db.enable("Camera", "com.nonexistent.app");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), TccError::NotFound { .. }));
+    }
+
+    #[test]
+    fn reset_specific_client() {
+        let (_dir, db) = make_temp_tcc_db();
+        db.grant("Camera", "com.example.a").unwrap();
+        db.grant("Camera", "com.example.b").unwrap();
+
+        db.reset("Camera", Some("com.example.a")).unwrap();
+        let entries = db.list(None, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].client, "com.example.b");
+    }
+
+    #[test]
+    fn reset_all_entries_for_service() {
+        let (_dir, db) = make_temp_tcc_db();
+        db.grant("Camera", "com.example.a").unwrap();
+        db.grant("Camera", "com.example.b").unwrap();
+        db.grant("Microphone", "com.example.a").unwrap();
+
+        let result = db.reset("Camera", None).unwrap();
+        assert!(result.contains("2 deleted"));
+
+        let entries = db.list(None, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].service_raw, "kTCCServiceMicrophone");
+    }
+
+    #[test]
+    fn with_paths_constructor() {
+        let db = TccDb::with_paths(
+            PathBuf::from("/tmp/user.db"),
+            PathBuf::from("/tmp/system.db"),
+            DbTarget::User,
+        );
+        assert_eq!(db.user_db_path, PathBuf::from("/tmp/user.db"));
+        assert_eq!(db.system_db_path, PathBuf::from("/tmp/system.db"));
     }
 }

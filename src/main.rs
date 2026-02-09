@@ -1,14 +1,14 @@
 mod tcc;
 
-use clap::{Parser, Subcommand};
-#[cfg(test)]
-use clap::error::ErrorKind;
 #[cfg(test)]
 use clap::CommandFactory;
+#[cfg(test)]
+use clap::error::ErrorKind;
+use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::process;
 
-use tcc::{compact_client, DbTarget, TccDb, TccEntry, SERVICE_MAP};
+use tcc::{DbTarget, SERVICE_MAP, TccDb, TccEntry, auth_value_display, compact_client};
 
 #[derive(Parser, Debug)]
 #[command(name = "tcc", about = "Manage macOS TCC permissions", version)]
@@ -108,12 +108,7 @@ fn print_entries(entries: &[TccEntry], compact: bool) {
         .max(hdr_client.len());
     let status_w = entries
         .iter()
-        .map(|e| match e.auth_value {
-            0 => "denied".len(),
-            2 => "granted".len(),
-            3 => "limited".len(),
-            v => format!("unknown({})", v).len(),
-        })
+        .map(|e| auth_value_display(e.auth_value).len())
         .max()
         .unwrap_or(0)
         .max(hdr_status.len());
@@ -127,8 +122,15 @@ fn print_entries(entries: &[TccEntry], compact: bool) {
 
     println!(
         "{:<sw$}  {:<cw$}  {:<stw$}  {:<srw$}  {}",
-        hdr_svc, hdr_client, hdr_status, hdr_source, hdr_modified,
-        sw = svc_w, cw = client_w, stw = status_w, srw = source_w,
+        hdr_svc,
+        hdr_client,
+        hdr_status,
+        hdr_source,
+        hdr_modified,
+        sw = svc_w,
+        cw = client_w,
+        stw = status_w,
+        srw = source_w,
     );
     println!(
         "{}  {}  {}  {}  {}",
@@ -141,17 +143,12 @@ fn print_entries(entries: &[TccEntry], compact: bool) {
 
     let mut prev_client: Option<&str> = None;
     for (entry, display_client) in entries.iter().zip(display_clients.iter()) {
-        let status_plain = match entry.auth_value {
-            0 => "denied".to_string(),
-            2 => "granted".to_string(),
-            3 => "limited".to_string(),
-            v => format!("unknown({})", v),
-        };
+        let status_plain = auth_value_display(entry.auth_value);
         let status_colored = match entry.auth_value {
-            0 => "denied".red().to_string(),
-            2 => "granted".green().to_string(),
-            3 => "limited".yellow().to_string(),
-            v => format!("unknown({})", v),
+            0 => status_plain.red().to_string(),
+            2 => status_plain.green().to_string(),
+            3 => status_plain.yellow().to_string(),
+            _ => status_plain.clone(),
         };
         // Pad based on visible length, then append the invisible ANSI tail
         let status_pad = status_w.saturating_sub(status_plain.len());
@@ -173,7 +170,9 @@ fn print_entries(entries: &[TccEntry], compact: bool) {
             status_cell,
             source,
             entry.last_modified,
-            sw = svc_w, cw = client_w, srw = source_w,
+            sw = svc_w,
+            cw = client_w,
+            srw = source_w,
         );
     }
 
@@ -201,7 +200,11 @@ mod tests {
     fn parse_list_with_client_and_service_filter() {
         let cli = parse(&["tcc", "list", "--client", "apple", "--service", "Camera"]).unwrap();
         match cli.command {
-            Commands::List { client, service, compact } => {
+            Commands::List {
+                client,
+                service,
+                compact,
+            } => {
                 assert_eq!(client.as_deref(), Some("apple"));
                 assert_eq!(service.as_deref(), Some("Camera"));
                 assert!(!compact);
@@ -235,7 +238,10 @@ mod tests {
     fn parse_grant() {
         let cli = parse(&["tcc", "grant", "Camera", "com.app.test"]).unwrap();
         match cli.command {
-            Commands::Grant { service, client_path } => {
+            Commands::Grant {
+                service,
+                client_path,
+            } => {
                 assert_eq!(service, "Camera");
                 assert_eq!(client_path, "com.app.test");
             }
@@ -247,7 +253,10 @@ mod tests {
     fn parse_revoke() {
         let cli = parse(&["tcc", "revoke", "Camera", "com.app.test"]).unwrap();
         match cli.command {
-            Commands::Revoke { service, client_path } => {
+            Commands::Revoke {
+                service,
+                client_path,
+            } => {
                 assert_eq!(service, "Camera");
                 assert_eq!(client_path, "com.app.test");
             }
@@ -259,7 +268,10 @@ mod tests {
     fn parse_enable() {
         let cli = parse(&["tcc", "enable", "Accessibility", "/usr/bin/foo"]).unwrap();
         match cli.command {
-            Commands::Enable { service, client_path } => {
+            Commands::Enable {
+                service,
+                client_path,
+            } => {
                 assert_eq!(service, "Accessibility");
                 assert_eq!(client_path, "/usr/bin/foo");
             }
@@ -271,7 +283,10 @@ mod tests {
     fn parse_disable() {
         let cli = parse(&["tcc", "disable", "Microphone", "com.app.x"]).unwrap();
         match cli.command {
-            Commands::Disable { service, client_path } => {
+            Commands::Disable {
+                service,
+                client_path,
+            } => {
                 assert_eq!(service, "Microphone");
                 assert_eq!(client_path, "com.app.x");
             }
@@ -283,7 +298,10 @@ mod tests {
     fn parse_reset_with_client() {
         let cli = parse(&["tcc", "reset", "Camera", "com.app.test"]).unwrap();
         match cli.command {
-            Commands::Reset { service, client_path } => {
+            Commands::Reset {
+                service,
+                client_path,
+            } => {
                 assert_eq!(service, "Camera");
                 assert_eq!(client_path.as_deref(), Some("com.app.test"));
             }
@@ -295,7 +313,10 @@ mod tests {
     fn parse_reset_without_client() {
         let cli = parse(&["tcc", "reset", "Camera"]).unwrap();
         match cli.command {
-            Commands::Reset { service, client_path } => {
+            Commands::Reset {
+                service,
+                client_path,
+            } => {
                 assert_eq!(service, "Camera");
                 assert!(client_path.is_none());
             }
@@ -320,7 +341,10 @@ mod tests {
     #[test]
     fn parse_no_subcommand_is_error() {
         let err = parse(&["tcc"]).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand);
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 
     #[test]
@@ -342,6 +366,28 @@ mod tests {
     }
 }
 
+/// Run a TCC command and handle the result uniformly
+fn run_command(result: Result<String, tcc::TccError>) {
+    match result {
+        Ok(msg) => println!("{}", msg.green()),
+        Err(e) => {
+            eprintln!("{}: {}", "Error".red().bold(), e);
+            process::exit(1);
+        }
+    }
+}
+
+/// Create a TccDb or exit with an error
+fn make_db(target: DbTarget) -> TccDb {
+    match TccDb::new(target) {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("{}: {}", "Error".red().bold(), e);
+            process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let target = if cli.user {
@@ -356,7 +402,7 @@ fn main() {
             service,
             compact,
         } => {
-            let db = TccDb::new(target);
+            let db = make_db(target);
             match db.list(client.as_deref(), service.as_deref()) {
                 Ok(entries) => print_entries(&entries, compact),
                 Err(e) => {
@@ -368,70 +414,25 @@ fn main() {
         Commands::Grant {
             service,
             client_path,
-        } => {
-            let db = TccDb::new(target);
-            match db.grant(&service, &client_path) {
-                Ok(msg) => println!("{}", msg.green()),
-                Err(e) => {
-                    eprintln!("{}: {}", "Error".red().bold(), e);
-                    process::exit(1);
-                }
-            }
-        }
+        } => run_command(make_db(target).grant(&service, &client_path)),
         Commands::Revoke {
             service,
             client_path,
-        } => {
-            let db = TccDb::new(target);
-            match db.revoke(&service, &client_path) {
-                Ok(msg) => println!("{}", msg.green()),
-                Err(e) => {
-                    eprintln!("{}: {}", "Error".red().bold(), e);
-                    process::exit(1);
-                }
-            }
-        }
+        } => run_command(make_db(target).revoke(&service, &client_path)),
         Commands::Enable {
             service,
             client_path,
-        } => {
-            let db = TccDb::new(target);
-            match db.enable(&service, &client_path) {
-                Ok(msg) => println!("{}", msg.green()),
-                Err(e) => {
-                    eprintln!("{}: {}", "Error".red().bold(), e);
-                    process::exit(1);
-                }
-            }
-        }
+        } => run_command(make_db(target).enable(&service, &client_path)),
         Commands::Disable {
             service,
             client_path,
-        } => {
-            let db = TccDb::new(target);
-            match db.disable(&service, &client_path) {
-                Ok(msg) => println!("{}", msg.green()),
-                Err(e) => {
-                    eprintln!("{}: {}", "Error".red().bold(), e);
-                    process::exit(1);
-                }
-            }
-        }
+        } => run_command(make_db(target).disable(&service, &client_path)),
         Commands::Reset {
             service,
             client_path,
-        } => {
-            let db = TccDb::new(target);
-            match db.reset(&service, client_path.as_deref()) {
-                Ok(msg) => println!("{}", msg.green()),
-                Err(e) => {
-                    eprintln!("{}: {}", "Error".red().bold(), e);
-                    process::exit(1);
-                }
-            }
-        }
+        } => run_command(make_db(target).reset(&service, client_path.as_deref())),
         Commands::Services => {
-            println!("{:<35}  {}", "INTERNAL NAME", "DESCRIPTION");
+            println!("{:<35}  DESCRIPTION", "INTERNAL NAME");
             println!("{:<35}  {}", "─".repeat(35), "─".repeat(25));
             let mut pairs: Vec<_> = SERVICE_MAP.iter().collect();
             pairs.sort_by_key(|(_, desc)| *desc);
@@ -440,7 +441,8 @@ fn main() {
             }
         }
         Commands::Info => {
-            for line in TccDb::info() {
+            let db = make_db(target);
+            for line in db.info() {
                 println!("{}", line);
             }
         }

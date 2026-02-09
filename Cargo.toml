@@ -12,3 +12,6 @@ chrono = "0.4"
 dirs = "6"
 libc = "0.2"
 sha1_smol = "1"
+
+[dev-dependencies]
+tempfile = "3"

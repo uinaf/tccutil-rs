@@ -22,14 +22,26 @@ fn services_runs_and_lists_known_services() {
 
     // Header row
     assert!(stdout.contains("INTERNAL NAME"), "should have header");
-    assert!(stdout.contains("DESCRIPTION"), "should have description header");
+    assert!(
+        stdout.contains("DESCRIPTION"),
+        "should have description header"
+    );
 
     // Spot-check a handful of well-known service names
-    assert!(stdout.contains("Accessibility"), "should list Accessibility");
+    assert!(
+        stdout.contains("Accessibility"),
+        "should list Accessibility"
+    );
     assert!(stdout.contains("Camera"), "should list Camera");
     assert!(stdout.contains("Microphone"), "should list Microphone");
-    assert!(stdout.contains("Screen Recording"), "should list Screen Recording");
-    assert!(stdout.contains("Full Disk Access"), "should list Full Disk Access");
+    assert!(
+        stdout.contains("Screen Recording"),
+        "should list Screen Recording"
+    );
+    assert!(
+        stdout.contains("Full Disk Access"),
+        "should list Full Disk Access"
+    );
 }
 
 // ── tcc list ─────────────────────────────────────────────────────────
@@ -80,10 +92,7 @@ fn info_shows_macos_version_and_db_paths() {
     assert!(stdout.contains("User DB:"), "should show User DB path");
     assert!(stdout.contains("System DB:"), "should show System DB path");
     assert!(stdout.contains("TCC.db"), "should mention TCC.db");
-    assert!(
-        stdout.contains("SIP status:"),
-        "should show SIP status"
-    );
+    assert!(stdout.contains("SIP status:"), "should show SIP status");
 }
 
 // ── Error cases ──────────────────────────────────────────────────────
