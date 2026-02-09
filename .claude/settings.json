@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build*)",
+      "Bash(cargo test*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo clippy*)",
+      "Bash(tcc *)",
+      "Read(*)",
+      "Write(src/**)",
+      "Write(tests/**)",
+      "Write(Cargo.toml)",
+      "Write(README.md)",
+      "Write(CLAUDE.md)"
+    ]
+  }
+}
