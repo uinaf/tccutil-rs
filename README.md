@@ -1,6 +1,6 @@
-# tccutil (Rust)
+# tccutil
 
-A Rust replacement for Apple's `/usr/bin/tccutil` and [jacobsalmela/tccutil.py](https://github.com/jacobsalmela/tccutil). Zero runtime dependencies, single static binary.
+A replacement for Apple's `/usr/bin/tccutil` and [jacobsalmela/tccutil.py](https://github.com/jacobsalmela/tccutil). Zero runtime dependencies, single static binary.
 
 Binary name: **`tccutil-rs`** (to avoid clashing with Apple's built-in `/usr/bin/tccutil`).
 
@@ -181,18 +181,21 @@ In practice, the **user database** is writable regardless of SIP. The **system d
 | | Apple `tccutil` | [tccutil.py](https://github.com/jacobsalmela/tccutil) | `tccutil-rs` |
 |---|---|---|---|
 | Language | Built-in (Obj-C) | Python | Rust |
-| Dependencies | Ships with macOS | Python 3 | None (static binary) |
+| Dependencies | Ships with macOS | Python 3 + pip | None (static binary) |
 | List permissions | ❌ | ✅ | ✅ |
 | Filter by client/service | ❌ | ✅ | ✅ |
 | Compact output | ❌ | ❌ | ✅ |
-| Grant | ❌ | ✅ | ✅ |
-| Revoke | ❌ | ✅ | ✅ |
-| Enable/Disable toggle | ❌ | ❌ | ✅ |
+| Grant | ❌ | ✅ ⚠️ | ✅ ⚠️ |
+| Revoke | ❌ | ✅ ⚠️ | ✅ ⚠️ |
+| Enable/Disable toggle | ❌ | ❌ | ✅ ⚠️ |
 | Reset | ✅ (only feature) | ✅ | ✅ |
 | Service name lookup | ❌ | ❌ | ✅ |
 | DB info / SIP check | ❌ | ❌ | ✅ |
 | User + System DB | System only | Both | Both |
+| Requires SIP disabled | No | **Yes** (all writes) | **No** (reads always work) |
 | macOS version support | Current | 10.9–14 | 15+ |
+
+> ⚠️ Write commands (`grant`, `revoke`, `enable`, `disable`) modify the TCC database directly. The **user database** is writable without disabling SIP. The **system database** requires `sudo` and works for most operations on recent macOS. Unlike `tccutil.py`, `tccutil-rs` does **not** require SIP to be disabled — but some system-level writes may still be restricted by macOS. Disabling SIP is generally **not recommended** as it removes important security protections.
 
 ## License
 
