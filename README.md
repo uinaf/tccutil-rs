@@ -44,6 +44,7 @@ Shows all TCC entries from both user and system databases.
 
 ```
 $ tccutil-rs list --compact
+
 SERVICE                    CLIENT                                                    STATUS      SOURCE  LAST MODIFIED
 ─────────────────────────  ────────────────────────────────────────────────────────  ──────────  ──────  ───────────────────
 Accessibility              node                                                      granted     system  2026-02-09 12:10:33
@@ -60,6 +61,7 @@ Screen Recording           node                                                 
 
 ```
 $ tccutil-rs list --client node --compact
+
 SERVICE                    CLIENT  STATUS      SOURCE  LAST MODIFIED
 ─────────────────────────  ──────  ──────────  ──────  ───────────────────
 Accessibility              node    granted     system  2026-02-09 12:10:33
@@ -77,6 +79,7 @@ Screen Recording           ″       granted     system  2026-02-09 11:31:33
 
 ```
 $ tccutil-rs list --service "Screen Recording"
+
 SERVICE           CLIENT                                         STATUS   SOURCE  LAST MODIFIED
 ────────────────  ─────────────────────────────────────────────  ───────  ──────  ───────────────────
 Screen Recording  /opt/homebrew/Cellar/node@22/22.22.0/bin/node  granted  system  2026-02-09 11:31:33
@@ -95,6 +98,7 @@ Maps internal `kTCCService*` identifiers to human-readable names. Both forms are
 
 ```
 $ tccutil-rs services
+
 INTERNAL NAME                        DESCRIPTION
 ───────────────────────────────────  ─────────────────────────
 kTCCServiceAccessibility             Accessibility
@@ -111,6 +115,7 @@ kTCCServiceSystemPolicyAllFiles      Full Disk Access
 
 ```
 $ tccutil-rs info
+
 macOS version: 26.2
 SIP status: System Integrity Protection status: enabled.
 
@@ -129,6 +134,7 @@ System DB: /Library/Application Support/com.apple.TCC/TCC.db
 
 ```
 $ sudo tccutil-rs grant Accessibility /usr/local/bin/my-tool
+
 Granted Accessibility to /usr/local/bin/my-tool (system database)
 ```
 
@@ -138,6 +144,7 @@ System-level services require `sudo`. Use `--user` to write to the user database
 
 ```
 $ sudo tccutil-rs revoke Accessibility /usr/local/bin/my-tool
+
 Revoked Accessibility from /usr/local/bin/my-tool (system database)
 ```
 
@@ -145,9 +152,11 @@ Revoked Accessibility from /usr/local/bin/my-tool (system database)
 
 ```
 $ sudo tccutil-rs enable Accessibility /usr/local/bin/my-tool
+
 Enabled Accessibility for /usr/local/bin/my-tool (system database)
 
 $ sudo tccutil-rs disable Accessibility /usr/local/bin/my-tool
+
 Disabled Accessibility for /usr/local/bin/my-tool (system database)
 ```
 
@@ -155,9 +164,11 @@ Disabled Accessibility for /usr/local/bin/my-tool (system database)
 
 ```
 $ sudo tccutil-rs reset Accessibility
+
 Reset all entries for Accessibility (system database)
 
 $ sudo tccutil-rs reset Accessibility /usr/local/bin/my-tool
+
 Reset Accessibility for /usr/local/bin/my-tool (system database)
 ```
 
