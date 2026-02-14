@@ -136,6 +136,13 @@ For tasks spanning extended sessions or multiple context windows:
 - Create setup scripts for resumability. The next session should pick up instantly.
 - Use git as your state tracker. Commit incrementally so progress survives context loss.
 
+## Never Skip, Always Fix
+- **NEVER use `#[ignore]`, `skip`, `xfail`, or disable tests.** Fix them. Mock dependencies, adjust assertions, whatever it takes.
+- **NEVER disable lint rules** (`#[allow(...)]`, `eslint-disable`, `oxlint-ignore`). Fix the code to satisfy the linter.
+- **NEVER suppress type errors** (`as any`, `@ts-ignore`, `@ts-expect-error`). Fix the types.
+- **NEVER lower coverage thresholds** to make CI pass. Write more tests.
+- If a test needs external resources (APIs, credentials, databases), **mock them**. Tests must pass in CI with zero external dependencies.
+
 ## Verify Before Done
 Never mark a task complete without proving it works.
 - Transform tasks into verifiable goals with success criteria.
@@ -146,23 +153,24 @@ Never mark a task complete without proving it works.
 - If there's a browser, open it and test the UI. If there's a CLI, run it.
 - You don't trust; you instrument.
 
-## Pre-Commit Checks
-Before every commit, run the project's `check` script. Every project should have one:
+## Pre-Commit Checks (MANDATORY — DO NOT SKIP)
+Before EVERY commit, run ALL project checks. No exceptions. No "I'll fix it later."
 
 ```json
 "check": "bun run lint && bun run typecheck && bun run format:check && bun run test"
 ```
 
 Not all projects have every check. Adapt to what's available:
-- **lint**: oxlint (or eslint). Non-negotiable.
+- **lint**: oxlint. Non-negotiable. No ESLint.
 - **typecheck**: `tsc --noEmit` or `astro check`. Non-negotiable for TypeScript.
-- **format:check**: oxfmt or prettier. Ensures consistent style.
+- **format:check**: oxfmt. No Prettier, no Biome.
 - **test**: `bun test`, `cargo test`, etc. Run if tests exist.
 - **knip**: Dead code detection. Run if configured.
 Build is NOT part of `check` — it's slow and runs in CI. Check is for fast pre-commit validation.
 
 If `check` script doesn't exist, run whatever lint/typecheck/test scripts are in package.json.
 Zero warnings, zero errors. If a check fails, fix it before committing.
+**This is the #1 reason CI fails.** Agents skip this step and push broken code. DON'T BE THAT AGENT.
 
 ## Change Summary
 After any non-trivial modification, summarize:
