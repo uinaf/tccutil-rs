@@ -18,7 +18,7 @@ macOS tracks privacy permissions (Camera, Microphone, Screen Recording, Accessib
 ### One-liner
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/uinafdev/tccutil/master/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/uinaf/tccutil/master/install.sh | sh
 ```
 
 ### From source
