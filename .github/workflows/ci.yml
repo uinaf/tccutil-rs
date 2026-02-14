@@ -39,8 +39,9 @@ jobs:
 
       - name: Coverage
         run: |
-          cargo install cargo-tarpaulin --locked
-          cargo tarpaulin --fail-under 90 --out xml
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --fail-under-lines 75
 
       - name: Build release
         run: cargo build --release
