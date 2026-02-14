@@ -37,5 +37,10 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Coverage
+        run: |
+          cargo install cargo-tarpaulin --locked
+          cargo tarpaulin --fail-under 90 --out xml
+
       - name: Build release
         run: cargo build --release
