@@ -184,43 +184,27 @@ List it explicitly and ask before removing. Don't leave corpses. Don't delete wi
 
 ## Git
 
-### Conventional Commits
-Format: `type(scope): description`
-
-Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `style`, `perf`, `ci`, `build`
-
-Rules:
-- Scope is optional but encouraged
-- Description: lowercase, imperative mood, no period
-- Examples:
-  - `feat(grid): add rebalance logic`
-  - `fix: handle empty response from API`
-  - `refactor(auth): extract token refresh into service`
-  - `docs: update setup instructions`
-
 ### Branch Naming
 Format: `type/short-description`
 
 Examples: `feat/add-grid-engine`, `fix/empty-response`, `refactor/auth-service`
 
-### Atomic Commits
-One logical change per commit. If you need "and" in the message, split it.
-Commit early, commit often. Small commits > monolith commits.
-
 ### Clean Commits
 No stray `console.log`, `TODO` comments, or debug code in commits.
 Review your diff before committing.
+
+### Commit Messages
+Describe **what changed and why**, not the process. Never write "address code review", "fix review comments", or "apply feedback" — these are meaningless in git log. Write what actually changed: `fix: remove duplicate serde_json dev-dependency`, `test: assert --compact conflicts with --json`.
+Squash review-fix commits into the original before merging — the PR history is noise, the commit log is the record.
 
 ### Rebase Over Merge
 Use rebase for feature branches to maintain clean linear history.
 Reserve merge commits for integrating long-lived branches.
 
-## Merge Requests
-When creating MRs (GitLab) or PRs (GitHub):
+## Pull Requests
 - Assign yourself as the author/implementer
 - Request review from the human maintainer
 - Enable source branch deletion on merge
-- Title follows conventional commit format
 - Lint, type check, tests: all green
 - Diff is small and focused
 - No debug artifacts
