@@ -14,7 +14,7 @@ Usage:
 
 Examples:
   scripts/install.sh          # install latest release
-  scripts/install.sh v0.1.1   # install a specific release
+  scripts/install.sh v0.2.0   # install a specific release
 
 Notes:
   - macOS only
