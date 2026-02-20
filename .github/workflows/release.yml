@@ -24,25 +24,27 @@ jobs:
       - name: Build x86_64
         run: cargo build --release --target x86_64-apple-darwin
 
-      - name: Create universal binary
+      - name: Package release artifacts
         run: |
-          lipo -create \
-            target/aarch64-apple-darwin/release/tccutil-rs \
-            target/x86_64-apple-darwin/release/tccutil-rs \
-            -output tccutil-rs-macos-universal
-          chmod +x tccutil-rs-macos-universal
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/arm64 dist/amd64
+          cp target/aarch64-apple-darwin/release/tccutil-rs dist/arm64/tccutil-rs
+          cp target/x86_64-apple-darwin/release/tccutil-rs dist/amd64/tccutil-rs
+          chmod +x dist/arm64/tccutil-rs dist/amd64/tccutil-rs
 
-      - name: Prepare release assets
-        run: |
-          cp target/aarch64-apple-darwin/release/tccutil-rs tccutil-rs-macos-aarch64
-          cp target/x86_64-apple-darwin/release/tccutil-rs tccutil-rs-macos-x86_64
-          chmod +x tccutil-rs-macos-aarch64 tccutil-rs-macos-x86_64
+          tar -C dist/arm64 -czf "tccutil-rs_v${VERSION}_darwin-arm64.tar.gz" tccutil-rs
+          tar -C dist/amd64 -czf "tccutil-rs_v${VERSION}_darwin-amd64.tar.gz" tccutil-rs
+
+          shasum -a 256 \
+            "tccutil-rs_v${VERSION}_darwin-arm64.tar.gz" \
+            "tccutil-rs_v${VERSION}_darwin-amd64.tar.gz" \
+            > checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            tccutil-rs-macos-universal
-            tccutil-rs-macos-aarch64
-            tccutil-rs-macos-x86_64
+            tccutil-rs_v*_darwin-arm64.tar.gz
+            tccutil-rs_v*_darwin-amd64.tar.gz
+            checksums.txt
