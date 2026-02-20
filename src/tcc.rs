@@ -131,6 +131,7 @@ pub struct TccDb {
     user_db_path: PathBuf,
     system_db_path: PathBuf,
     target: DbTarget,
+    suppress_warnings: bool,
 }
 
 impl TccDb {
@@ -140,6 +141,7 @@ impl TccDb {
             user_db_path: home.join("Library/Application Support/com.apple.TCC/TCC.db"),
             system_db_path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
             target,
+            suppress_warnings: false,
         })
     }
 
@@ -149,7 +151,12 @@ impl TccDb {
             user_db_path: user,
             system_db_path: system,
             target,
+            suppress_warnings: false,
         }
+    }
+
+    pub fn set_suppress_warnings(&mut self, suppress_warnings: bool) {
+        self.suppress_warnings = suppress_warnings;
     }
 
     pub(crate) fn format_timestamp(ts: i64) -> String {
@@ -176,7 +183,11 @@ impl TccDb {
             .unwrap_or_else(|| raw.strip_prefix("kTCCService").unwrap_or(raw).to_string())
     }
 
-    fn read_db(path: &Path, is_system: bool) -> Result<Vec<TccEntry>, TccError> {
+    fn read_db(
+        path: &Path,
+        is_system: bool,
+        emit_warnings: bool,
+    ) -> Result<Vec<TccEntry>, TccError> {
         if !path.exists() {
             return Ok(vec![]);
         }
@@ -228,11 +239,15 @@ impl TccDb {
         for result in rows {
             match result {
                 Ok(entry) => entries.push(entry),
-                Err(e) => eprintln!(
-                    "Warning: skipping malformed row in {}: {}",
-                    path.display(),
-                    e
-                ),
+                Err(e) => {
+                    if emit_warnings {
+                        eprintln!(
+                            "Warning: skipping malformed row in {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
             }
         }
 
@@ -247,16 +262,24 @@ impl TccDb {
         let mut entries = Vec::new();
 
         if self.target == DbTarget::Default || self.target == DbTarget::User {
-            match Self::read_db(&self.user_db_path, false) {
+            match Self::read_db(&self.user_db_path, false, !self.suppress_warnings) {
                 Ok(mut e) => entries.append(&mut e),
-                Err(e) => eprintln!("Warning: {}", e),
+                Err(e) => {
+                    if !self.suppress_warnings {
+                        eprintln!("Warning: {}", e);
+                    }
+                }
             }
         }
 
         if self.target == DbTarget::Default {
-            match Self::read_db(&self.system_db_path, true) {
+            match Self::read_db(&self.system_db_path, true, !self.suppress_warnings) {
                 Ok(mut e) => entries.append(&mut e),
-                Err(e) => eprintln!("Warning: {}", e),
+                Err(e) => {
+                    if !self.suppress_warnings {
+                        eprintln!("Warning: {}", e);
+                    }
+                }
             }
         }
 
@@ -414,7 +437,9 @@ impl TccDb {
         self.check_root_for_write(&service_key, "grant", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning {
+        if let Some(w) = &warning
+            && !self.suppress_warnings
+        {
             eprintln!("{}", w);
         }
 
@@ -447,7 +472,9 @@ impl TccDb {
         self.check_root_for_write(&service_key, "revoke", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning {
+        if let Some(w) = &warning
+            && !self.suppress_warnings
+        {
             eprintln!("{}", w);
         }
 
@@ -482,7 +509,9 @@ impl TccDb {
         self.check_root_for_write(&service_key, "enable", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning {
+        if let Some(w) = &warning
+            && !self.suppress_warnings
+        {
             eprintln!("{}", w);
         }
 
@@ -521,7 +550,9 @@ impl TccDb {
         self.check_root_for_write(&service_key, "disable", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning {
+        if let Some(w) = &warning
+            && !self.suppress_warnings
+        {
             eprintln!("{}", w);
         }
 
@@ -560,7 +591,9 @@ impl TccDb {
             self.check_root_for_write(&service_key, "reset", service, c)?;
 
             let (conn, warning) = self.open_writable(&service_key)?;
-            if let Some(w) = &warning {
+            if let Some(w) = &warning
+                && !self.suppress_warnings
+            {
                 eprintln!("{}", w);
             }
 

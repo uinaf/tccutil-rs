@@ -13,6 +13,15 @@ fn run_tcc(args: &[&str]) -> (String, String, bool) {
     (stdout, stderr, output.status.success())
 }
 
+fn assert_basic_json_shape(stdout: &str) {
+    let trimmed = stdout.trim();
+    assert!(
+        trimmed.starts_with('{'),
+        "JSON output should start with '{{'"
+    );
+    assert!(trimmed.ends_with('}'), "JSON output should end with '}}'");
+}
+
 // ── tccutil-rs services ─────────────────────────────────────────────
 
 #[test]
@@ -128,4 +137,59 @@ fn version_flag_prints_version() {
         stdout.contains("tccutil-rs"),
         "version output should mention tccutil-rs"
     );
+}
+
+#[test]
+fn services_json_mode_returns_valid_json() {
+    let (stdout, stderr, success) = run_tcc(&["services", "--json"]);
+    assert!(success, "tccutil-rs services --json should exit 0");
+    assert!(
+        stderr.trim().is_empty(),
+        "stderr should be empty in JSON mode"
+    );
+
+    assert_basic_json_shape(&stdout);
+    assert!(stdout.contains("\"ok\":true"));
+    assert!(stdout.contains("\"command\":\"services\""));
+    assert!(stdout.contains("\"data\":{\"services\":["));
+    assert!(stdout.contains("\"error\":null"));
+}
+
+#[test]
+fn list_json_mode_returns_valid_json() {
+    let (stdout, stderr, success) = run_tcc(&["--user", "list", "--json"]);
+    assert!(success, "tccutil-rs --user list --json should exit 0");
+    assert!(
+        stderr.trim().is_empty(),
+        "stderr should be empty in JSON mode"
+    );
+
+    assert_basic_json_shape(&stdout);
+    assert!(stdout.contains("\"ok\":true"));
+    assert!(stdout.contains("\"command\":\"list\""));
+    assert!(stdout.contains("\"data\":{\"count\":"));
+    assert!(stdout.contains("\"entries\":["));
+    assert!(stdout.contains("\"error\":null"));
+}
+
+#[test]
+fn grant_json_mode_failure_has_error_shape() {
+    let (stdout, stderr, success) = run_tcc(&[
+        "grant",
+        "DefinitelyNotARealService",
+        "com.example.app",
+        "--json",
+    ]);
+    assert!(!success, "grant with unknown service should fail");
+    assert!(
+        stderr.trim().is_empty(),
+        "stderr should be empty in JSON mode"
+    );
+
+    assert_basic_json_shape(&stdout);
+    assert!(stdout.contains("\"ok\":false"));
+    assert!(stdout.contains("\"command\":\"grant\""));
+    assert!(stdout.contains("\"data\":null"));
+    assert!(stdout.contains("\"error\":{\"kind\":"));
+    assert!(stdout.contains("\"message\":\""));
 }
