@@ -80,7 +80,11 @@ impl fmt::Display for TccError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TccError::DbOpen { path, source } => {
-                write!(f, "Failed to open {}: {}", path.display(), source)
+                write!(f, "Failed to open {}: {}", path.display(), source)?;
+                if let Some(hint) = tcc_open_access_denied_hint(path, source) {
+                    write!(f, "\n\n{}", hint)?;
+                }
+                Ok(())
             }
             TccError::NotFound { service, client } => {
                 write!(
@@ -107,6 +111,32 @@ impl fmt::Display for TccError {
             TccError::WriteFailed(s) => write!(f, "{}", s),
         }
     }
+}
+
+fn tcc_open_access_denied_hint(path: &Path, source: &str) -> Option<String> {
+    if !is_tcc_db_path(path) {
+        return None;
+    }
+
+    let source_lower = source.to_lowercase();
+    let is_open_denied = source_lower.contains("authorization denied")
+        || source_lower.contains("open authorization denied")
+        || source_lower.contains("not authorized");
+    if !is_open_denied {
+        return None;
+    }
+
+    Some(
+        "macOS blocked access to TCC.db (Full Disk Access is required for terminal apps).\n\
+         Grant Full Disk Access to the app launching this command (Terminal, iTerm, Ghostty, VS Code, etc.), then fully quit and reopen that app before retrying.\n\
+         `sudo` does not bypass TCC privacy protections."
+            .to_string(),
+    )
+}
+
+fn is_tcc_db_path(path: &Path) -> bool {
+    path == Path::new("/Library/Application Support/com.apple.TCC/TCC.db")
+        || path.ends_with("Library/Application Support/com.apple.TCC/TCC.db")
 }
 
 #[derive(Debug)]
@@ -850,6 +880,57 @@ mod tests {
         assert_eq!(auth_value_display(1), "unknown(1)");
         assert_eq!(auth_value_display(99), "unknown(99)");
         assert_eq!(auth_value_display(-1), "unknown(-1)");
+    }
+
+    // ── DB open authorization hint mapping ───────────────────────────
+
+    #[test]
+    fn db_open_auth_denied_on_user_tcc_db_includes_fda_hint() {
+        let err = TccError::DbOpen {
+            path: PathBuf::from("/Users/test/Library/Application Support/com.apple.TCC/TCC.db"),
+            source: "opening database: authorization denied".to_string(),
+        };
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("Failed to open"));
+        assert!(rendered.contains("Full Disk Access"));
+        assert!(rendered.contains("Terminal, iTerm, Ghostty, VS Code"));
+        assert!(rendered.contains("fully quit and reopen"));
+        assert!(rendered.contains("`sudo` does not bypass TCC"));
+    }
+
+    #[test]
+    fn db_open_auth_denied_on_system_tcc_db_includes_fda_hint() {
+        let err = TccError::DbOpen {
+            path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
+            source: "Open authorization denied".to_string(),
+        };
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("Full Disk Access"));
+    }
+
+    #[test]
+    fn db_open_auth_denied_on_non_tcc_path_does_not_include_hint() {
+        let err = TccError::DbOpen {
+            path: PathBuf::from("/tmp/not-tcc.db"),
+            source: "opening database: authorization denied".to_string(),
+        };
+
+        let rendered = err.to_string();
+        assert!(!rendered.contains("Full Disk Access"));
+        assert!(!rendered.contains("`sudo` does not bypass TCC"));
+    }
+
+    #[test]
+    fn db_open_non_auth_error_on_tcc_path_does_not_include_hint() {
+        let err = TccError::DbOpen {
+            path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
+            source: "unable to open database file".to_string(),
+        };
+
+        let rendered = err.to_string();
+        assert!(!rendered.contains("Full Disk Access"));
     }
 
     // ── Compact path display ──────────────────────────────────────────

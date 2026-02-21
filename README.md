@@ -194,6 +194,14 @@ On macOS 10.14+, System Integrity Protection restricts direct writes to TCC data
 
 In practice, the **user database** is writable regardless of SIP. The **system database** requires running with `sudo` (works for most operations on recent macOS).
 
+## Troubleshooting
+
+### Full Disk Access (sqlite open authorization denied)
+
+If you see an authorization-denied error opening `TCC.db`, grant **Full Disk Access** to the terminal app running `tccutil-rs` (for example Terminal, iTerm, Ghostty, or VS Code's integrated terminal), then fully quit and reopen that app before retrying.
+
+`sudo` does not bypass TCC privacy protections.
+
 ## Comparison
 
 | | Apple `tccutil` | [tccutil.py](https://github.com/jacobsalmela/tccutil) | `tccutil-rs` |
