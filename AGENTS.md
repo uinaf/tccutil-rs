@@ -25,6 +25,14 @@ cargo fmt                      # format
 cp target/release/tccutil-rs /opt/homebrew/bin/tccutil-rs  # install
 ```
 
+The Rust toolchain is pinned via `rust-toolchain.toml`; rustup auto-installs it on first `cargo` invocation in this directory.
+
+Optional pre-push gate (mirrors CI: fmt + clippy + test):
+
+```sh
+scripts/setup-hooks.sh         # one-time, points git at .git-hooks/
+```
+
 ## Architecture
 
 Single binary, two source files. Reads both user (`~/Library/Application Support/com.apple.TCC/TCC.db`) and system (`/Library/Application Support/com.apple.TCC/TCC.db`) databases. System DB writes require `sudo`. SIP may block writes on newer macOS.

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-push gate: mirrors CI so failures surface locally in seconds, not minutes.
+# Install: scripts/setup-hooks.sh
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "→ cargo fmt --check"
+cargo fmt --check
+
+echo "→ cargo clippy -- -D warnings"
+cargo clippy --quiet -- -D warnings
+
+echo "→ cargo test"
+cargo test --quiet
+
+echo "✓ pre-push checks passed"
