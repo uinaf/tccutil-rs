@@ -4,7 +4,7 @@ A replacement for Apple's `/usr/bin/tccutil` and [jacobsalmela/tccutil.py](https
 
 Binary name: **`tccutil-rs`** (to avoid clashing with Apple's built-in `/usr/bin/tccutil`).
 
-## the problem
+## The problem
 
 macOS tracks privacy permissions (Camera, Microphone, Screen Recording, Accessibility, etc.) in a SQLite database called TCC (Transparency, Consent, and Control). Two issues make this painful to manage:
 
@@ -13,22 +13,22 @@ macOS tracks privacy permissions (Camera, Microphone, Screen Recording, Accessib
 
 `tccutil-rs` gives you full read/write access to both the user and system TCC databases.
 
-## install
+## Install
 
-### homebrew
+### Homebrew
 
 ```sh
 brew tap uinaf/tap
 brew install tccutil-rs
 ```
 
-### direct install
+### Direct install
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/uinaf/tccutil/main/scripts/install.sh | sh
 ```
 
-### source build
+### Source build
 
 The Rust toolchain is pinned in `rust-toolchain.toml`; rustup auto-installs it on first `cargo` invocation.
 
@@ -37,7 +37,7 @@ cargo build --release
 install -m 0755 target/release/tccutil-rs /usr/local/bin/tccutil-rs
 ```
 
-### shell alias (optional)
+### Shell alias (optional)
 
 ```sh
 # Add to ~/.zshrc or ~/.bashrc
@@ -45,9 +45,9 @@ install -m 0755 target/release/tccutil-rs /usr/local/bin/tccutil-rs
 alias tccutil="tccutil-rs"
 ```
 
-## commands
+## Commands
 
-### `tccutil-rs list` — list all permissions
+### `tccutil-rs list` — List all permissions
 
 Shows all TCC entries from both user and system databases.
 
@@ -66,7 +66,7 @@ Screen Recording           node                                                 
 ...
 ```
 
-#### `--client <NAME>` — filter by client (partial match)
+#### `--client <NAME>` — Filter by client (partial match)
 
 ```
 $ tccutil-rs list --client node --compact
@@ -84,7 +84,7 @@ Screen Recording           ″       granted     system  2026-02-09 11:31:33
 9 entries total
 ```
 
-#### `--service <NAME>` — filter by service
+#### `--service <NAME>` — Filter by service
 
 ```
 $ tccutil-rs list --service "Screen Recording"
@@ -97,11 +97,11 @@ Screen Recording  com.apple.screensharing.agent                  granted  system
 2 entries total
 ```
 
-#### `--user` — query user database only
+#### `--user` — Query user database only
 
 By default, `tccutil-rs` reads both databases and shows a source column. Use `--user` to query only the per-user database.
 
-### `tccutil-rs services` — list known TCC service names
+### `tccutil-rs services` — List known TCC service names
 
 Maps internal `kTCCService*` identifiers to human-readable names. Both forms are accepted by all commands.
 
@@ -120,7 +120,7 @@ kTCCServiceSystemPolicyAllFiles      Full Disk Access
 ...
 ```
 
-### `tccutil-rs info` — show database info and SIP status
+### `tccutil-rs info` — Show database info and SIP status
 
 ```
 $ tccutil-rs info
@@ -139,7 +139,7 @@ System DB: /Library/Application Support/com.apple.TCC/TCC.db
   Schema digest: 34abf99d20 (known)
 ```
 
-### `tccutil-rs grant` — grant a permission
+### `tccutil-rs grant` — Grant a permission
 
 ```
 $ sudo tccutil-rs grant Accessibility /usr/local/bin/my-tool
@@ -149,7 +149,7 @@ Granted Accessibility to /usr/local/bin/my-tool (system database)
 
 System-level services require `sudo`. Use `--user` to write to the user database instead.
 
-### `tccutil-rs revoke` — revoke a permission
+### `tccutil-rs revoke` — Revoke a permission
 
 ```
 $ sudo tccutil-rs revoke Accessibility /usr/local/bin/my-tool
@@ -157,7 +157,7 @@ $ sudo tccutil-rs revoke Accessibility /usr/local/bin/my-tool
 Revoked Accessibility from /usr/local/bin/my-tool (system database)
 ```
 
-### `tccutil-rs enable` / `disable` — toggle an existing entry
+### `tccutil-rs enable` / `disable` — Toggle an existing entry
 
 ```
 $ sudo tccutil-rs enable Accessibility /usr/local/bin/my-tool
@@ -169,7 +169,7 @@ $ sudo tccutil-rs disable Accessibility /usr/local/bin/my-tool
 Disabled Accessibility for /usr/local/bin/my-tool (system database)
 ```
 
-### `tccutil-rs reset` — reset entries for a service
+### `tccutil-rs reset` — Reset entries for a service
 
 ```
 $ sudo tccutil-rs reset Accessibility
@@ -181,7 +181,7 @@ $ sudo tccutil-rs reset Accessibility /usr/local/bin/my-tool
 Reset Accessibility for /usr/local/bin/my-tool (system database)
 ```
 
-## global flags
+## Global flags
 
 | Flag | Description |
 |------|-------------|
@@ -192,7 +192,7 @@ Reset Accessibility for /usr/local/bin/my-tool (system database)
 
 `list` also accepts `--compact` / `-c` to show binary names instead of full paths.
 
-## json output
+## JSON output
 
 Every command accepts `--json`. On success and on failure the response is a single envelope on stdout (stderr stays empty) with the same shape, so scripts and agents can parse one structure:
 
@@ -203,21 +203,21 @@ Every command accepts `--json`. On success and on failure the response is a sing
 
 Error `kind` is one of `DbOpen`, `NotFound`, `NeedsRoot`, `UnknownService`, `AmbiguousService`, `QueryFailed`, `SchemaInvalid`, `HomeDirNotFound`, `WriteFailed`, or `ParseError` (clap parse failures).
 
-## sip limitations
+## SIP limitations
 
 On macOS 10.14+, System Integrity Protection restricts direct writes to TCC databases. Read operations (`list`, `services`, `info`) always work. Write operations (`grant`, `revoke`, `enable`, `disable`, `reset`) may fail even with `sudo` if SIP is enabled.
 
 In practice, the **user database** is writable regardless of SIP. The **system database** requires running with `sudo` (works for most operations on recent macOS).
 
-## troubleshooting
+## Troubleshooting
 
-### full disk access (sqlite open authorization denied)
+### Full Disk Access (sqlite open authorization denied)
 
 If you see an authorization-denied error opening `TCC.db`, grant **Full Disk Access** to the terminal app running `tccutil-rs` (for example Terminal, iTerm, Ghostty, or VS Code's integrated terminal), then fully quit and reopen that app before retrying.
 
 `sudo` does not bypass TCC privacy protections.
 
-## comparison
+## Comparison
 
 | | Apple `tccutil` | [tccutil.py](https://github.com/jacobsalmela/tccutil) | `tccutil-rs` |
 |---|---|---|---|
@@ -238,20 +238,20 @@ If you see an authorization-denied error opening `TCC.db`, grant **Full Disk Acc
 
 > ⚠️ Write commands (`grant`, `revoke`, `enable`, `disable`) modify the TCC database directly. The **user database** is writable without disabling SIP. The **system database** requires `sudo` and works for most operations on recent macOS. Unlike `tccutil.py`, `tccutil-rs` does **not** require SIP to be disabled — but some system-level writes may still be restricted by macOS. Disabling SIP is generally **not recommended** as it removes important security protections.
 
-## docs
+## Docs
 
-- [contributing](CONTRIBUTING.md) — set up a dev environment, run validation, and open a pull request.
-- [security](SECURITY.md) — private-first vulnerability reporting.
-- [agent guide](AGENTS.md) — what an agent needs to know to work in this repo.
+- [Contributing](CONTRIBUTING.md) — Set up a dev environment, run validation, and open a pull request.
+- [Security](SECURITY.md) — Private-first vulnerability reporting.
+- [Agent guide](AGENTS.md) — What an agent needs to know to work in this repo.
 
-## contributing
+## Contributing
 
-see [contributing](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## security
+## Security
 
-see [security](SECURITY.md). report vulnerabilities privately to `dev@uinaf.dev`.
+See [SECURITY.md](SECURITY.md). Report vulnerabilities privately to `dev@uinaf.dev`.
 
-## license
+## License
 
 [MIT](LICENSE)

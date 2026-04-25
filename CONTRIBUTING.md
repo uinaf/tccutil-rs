@@ -1,10 +1,10 @@
-# contributing
+# Contributing
 
-thanks for sending changes.
+Thanks for sending changes.
 
-## setup
+## Setup
 
-the rust toolchain is pinned in `rust-toolchain.toml`. rustup auto-installs it on the first `cargo` invocation in this directory — no manual step required.
+The Rust toolchain is pinned in `rust-toolchain.toml`. Rustup auto-installs it on the first `cargo` invocation in this directory — no manual step required.
 
 ```sh
 git clone git@github.com:uinaf/tccutil.git
@@ -12,52 +12,52 @@ cd tccutil
 cargo build --release
 ```
 
-binary lands at `target/release/tccutil-rs`.
+Binary lands at `target/release/tccutil-rs`.
 
-## run locally
+## Run locally
 
-invoke the binary directly while iterating:
+Invoke the binary directly while iterating:
 
 ```sh
 cargo run -- list --user
 cargo run -- info
 ```
 
-read commands work without privileges. write commands (`grant`, `revoke`, `enable`, `disable`, `reset`) need either the user db (no sudo) or `sudo` for the system db. see the [sip limitations](README.md#sip-limitations) section in the readme.
+Read commands work without privileges. Write commands (`grant`, `revoke`, `enable`, `disable`, `reset`) need either the user database (no sudo) or `sudo` for the system database. See [SIP limitations](README.md#sip-limitations) in the README.
 
-## validation
+## Validation
 
-one entrypoint runs everything ci runs:
+One entrypoint runs everything CI runs:
 
 ```sh
 scripts/verify.sh
 ```
 
-it runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` — same gates as the ci `verify` job.
+It runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` — the same gates as the CI `Verify` job.
 
-optional pre-push gate that calls the same script:
+Optional pre-push gate that calls the same script:
 
 ```sh
 scripts/setup-hooks.sh         # one-time, points git at .git-hooks/
 ```
 
-after install, every `git push` runs `scripts/verify.sh` and fails the push if anything goes red.
+After install, every `git push` runs `scripts/verify.sh` and fails the push if anything goes red.
 
-## development notes
+## Development notes
 
-- conventional commits — `feat:`, `fix:`, `test:`, `docs:`, `chore:`. ci does not enforce; reviewers do.
-- no `unsafe` outside the single `libc::geteuid()` call in `src/tcc.rs`.
-- errors return `Result<_, TccError>` — never panic in library code. add a new variant when an error doesn't fit the existing kinds.
-- table output in `src/main.rs` does manual ansi-aware padding. if you touch it, run `tccutil-rs list` against a real tcc.db to eyeball alignment.
-- integration tests in `tests/integration.rs` exec the real binary via `CARGO_BIN_EXE_tccutil-rs`. unit tests in `src/tcc.rs` round-trip real sqlite via `tempfile`. no mocks.
+- Conventional commits — `feat:`, `fix:`, `test:`, `docs:`, `chore:`. CI does not enforce; reviewers do.
+- No `unsafe` outside the single `libc::geteuid()` call in `src/tcc.rs`.
+- Errors return `Result<_, TccError>` — never panic in library code. Add a new variant when an error doesn't fit the existing kinds.
+- Table output in `src/main.rs` does manual ANSI-aware padding. If you touch it, run `tccutil-rs list` against a real TCC.db to eyeball alignment.
+- Integration tests in `tests/integration.rs` exec the real binary via `CARGO_BIN_EXE_tccutil-rs`. Unit tests in `src/tcc.rs` round-trip real SQLite via `tempfile`. No mocks.
 
-## pull requests
+## Pull requests
 
-- keep changes focused. a single concern per pr.
-- add or update tests when behavior changes. mock-only tests don't count.
-- run `scripts/verify.sh` before pushing.
-- include the most useful evidence for the kind of change:
-  - command output for new flags or subcommands
-  - before-and-after for output formatting changes
-  - sqlite schema notes when the digest set in `KNOWN_DIGESTS` changes
-  - rollout notes when touching write paths or root checks
+- Keep changes focused — a single concern per PR.
+- Add or update tests when behavior changes. Mock-only tests don't count.
+- Run `scripts/verify.sh` before pushing.
+- Include the most useful evidence for the kind of change:
+  - Command output for new flags or subcommands
+  - Before-and-after for output formatting changes
+  - SQLite schema notes when the digest set in `KNOWN_DIGESTS` changes
+  - Rollout notes when touching write paths or root checks
