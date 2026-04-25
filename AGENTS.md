@@ -2,7 +2,11 @@
 
 Rust CLI for managing macOS TCC (Transparency, Consent, and Control) privacy permissions databases. Replaces Apple's limited `tccutil` and the Python-based `tccutil.py` with a single static binary — no runtime dependencies.
 
-This file is the agent navigation map. User-facing usage lives in [README.md](README.md), contributor setup and validation in [CONTRIBUTING.md](CONTRIBUTING.md), and vulnerability reporting in [SECURITY.md](SECURITY.md).
+This file is the agent navigation map. Each section is a pointer:
+
+- User-facing usage, install, commands, JSON envelope → [README.md](README.md)
+- Contributor setup, validation, conventions, PR expectations → [CONTRIBUTING.md](CONTRIBUTING.md)
+- Vulnerability reporting → [SECURITY.md](SECURITY.md)
 
 ## Tech stack
 
@@ -27,22 +31,3 @@ Single binary, two source files. Reads both user (`~/Library/Application Support
 - `scripts/verify.sh` — Single canonical gate. CI calls it; the pre-push hook calls it; run it locally before opening a PR
 - `Cargo.toml` — Dependencies and package metadata
 - `rust-toolchain.toml` — Pinned toolchain channel
-
-## Commands
-
-`list`, `grant`, `revoke`, `enable`, `disable`, `reset`, `services`, `info`. Service names accept both human-readable (`Accessibility`) and internal (`kTCCServiceAccessibility`) forms. See [README.md](README.md#commands) for examples.
-
-## Conventions
-
-- Conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`)
-- No `unsafe` (except the one `libc::geteuid()` call for root detection)
-- Errors return `Result<_, TccError>` — typed enum with discrete kinds (`DbOpen`, `NotFound`, `NeedsRoot`, `UnknownService`, `AmbiguousService`, `QueryFailed`, `SchemaInvalid`, `HomeDirNotFound`, `WriteFailed`); no panics in library code
-- Table output uses manual column-width calculation with ANSI-aware padding
-
-## Validation
-
-```sh
-scripts/verify.sh
-```
-
-Runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` — same gates CI runs.

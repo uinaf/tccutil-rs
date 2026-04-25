@@ -4,15 +4,13 @@ Thanks for sending changes.
 
 ## Setup
 
-The Rust toolchain is pinned in `rust-toolchain.toml`. Rustup auto-installs it on the first `cargo` invocation in this directory — no manual step required.
-
 ```sh
 git clone git@github.com:uinaf/tccutil.git
 cd tccutil
 cargo build --release
 ```
 
-Binary lands at `target/release/tccutil-rs`.
+Binary lands at `target/release/tccutil-rs`. Cargo auto-installs the pinned toolchain on first run.
 
 ## Run locally
 
