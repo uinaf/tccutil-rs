@@ -22,7 +22,7 @@ cargo build --release          # binary at target/release/tccutil-rs
 cargo test                     # unit + integration tests
 cargo clippy                   # lint
 cargo fmt                      # format
-cp target/release/tccutil-rs /opt/homebrew/bin/tccutil-rs  # install
+install -m 0755 target/release/tccutil-rs /usr/local/bin/tccutil-rs  # install
 ```
 
 The Rust toolchain is pinned via `rust-toolchain.toml`; rustup auto-installs it on first `cargo` invocation in this directory.
@@ -54,5 +54,5 @@ Service names accept both human-readable (`Accessibility`) and internal (`kTCCSe
 
 - Conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`)
 - No `unsafe` (except the one `libc::geteuid()` call for root detection)
-- Errors return `Result<String, String>` — no panics in library code
+- Errors return `Result<_, TccError>` — typed enum with discrete kinds (`DbOpen`, `NotFound`, `NeedsRoot`, `UnknownService`, `AmbiguousService`, `QueryFailed`, `SchemaInvalid`, `HomeDirNotFound`, `WriteFailed`); no panics in library code
 - Table output uses manual column-width calculation with ANSI-aware padding

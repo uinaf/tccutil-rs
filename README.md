@@ -184,9 +184,22 @@ Reset Accessibility for /usr/local/bin/my-tool (system database)
 | Flag | Description |
 |------|-------------|
 | `--user`, `-u` | Operate on the per-user database instead of the system database |
-| `--compact` | Show binary names instead of full paths (list only) |
+| `--json`, `-j` | Emit a machine-readable JSON envelope instead of human-formatted output |
 | `--help`, `-h` | Print help |
 | `--version`, `-V` | Print version |
+
+`list` also accepts `--compact` / `-c` to show binary names instead of full paths.
+
+## JSON output
+
+Every command accepts `--json`. On success and on failure the response is a single envelope on stdout (stderr stays empty) with the same shape, so scripts and agents can parse one structure:
+
+```json
+{ "ok": true,  "command": "list",  "data": { "count": 3, "entries": [ ... ] }, "error": null }
+{ "ok": false, "command": "grant", "data": null, "error": { "kind": "UnknownService", "message": "..." } }
+```
+
+Error `kind` is one of `DbOpen`, `NotFound`, `NeedsRoot`, `UnknownService`, `AmbiguousService`, `QueryFailed`, `SchemaInvalid`, `HomeDirNotFound`, `WriteFailed`, or `ParseError` (clap parse failures).
 
 ## SIP limitations
 
