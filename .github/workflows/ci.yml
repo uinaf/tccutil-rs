@@ -5,9 +5,12 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# Concurrency is intentionally job-level, not workflow-level. A workflow-
+# level cancellable group would also cancel the `release` job mid-flight if
+# a second push to `main` arrived — semantic-release would have created the
+# tag and GitHub Release, but binary assets and the Homebrew bump would
+# never run, leaving a half-published release. Job-level groups let verify
+# stay cancellable while release queues.
 
 jobs:
   verify:
@@ -19,6 +22,9 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: read
+    concurrency:
+      group: verify-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
