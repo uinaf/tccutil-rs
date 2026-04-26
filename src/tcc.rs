@@ -1037,14 +1037,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn list_returns_ok_with_partial_results_when_one_db_succeeds() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let good_user = dir.path().join("user.db");
-        let bad_system = dir.path().join("system.db");
-
-        // Build a valid empty TCC schema for the user DB.
-        let conn = Connection::open(&good_user).expect("create user db");
+    /// Build a valid TCC.db with the production schema at `path`.
+    fn build_valid_tcc_db(path: &Path) {
+        let conn = Connection::open(path).expect("create db");
         conn.execute_batch(
             "CREATE TABLE access (
                 service TEXT NOT NULL,
@@ -1059,9 +1054,14 @@ mod tests {
             );",
         )
         .expect("schema");
-        drop(conn);
+    }
 
-        // Junk system DB so it errors on read.
+    #[test]
+    fn list_returns_ok_with_partial_results_when_one_db_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let good_user = dir.path().join("user.db");
+        let bad_system = dir.path().join("system.db");
+        build_valid_tcc_db(&good_user);
         std::fs::write(&bad_system, b"not a tcc db").expect("write system");
 
         let mut db = TccDb::with_paths(good_user, bad_system, DbTarget::Default);
@@ -1078,6 +1078,23 @@ mod tests {
             0,
             "user DB is empty, expected 0 entries"
         );
+    }
+
+    #[test]
+    fn list_partial_failure_emits_warning_when_warnings_enabled() {
+        // Same scenario as the partial-success test, but with warnings enabled
+        // so the per-failure stderr branch is exercised. The visible side
+        // effect is a warning on stderr (captured by cargo test); the
+        // observable contract is that the function still returns Ok.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let good_user = dir.path().join("user.db");
+        let bad_system = dir.path().join("system.db");
+        build_valid_tcc_db(&good_user);
+        std::fs::write(&bad_system, b"not a tcc db").expect("write system");
+
+        let db = TccDb::with_paths(good_user, bad_system, DbTarget::Default);
+        let result = db.list(None, None);
+        assert!(result.is_ok(), "partial success should return Ok");
     }
 
     #[test]

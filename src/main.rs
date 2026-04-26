@@ -382,6 +382,90 @@ mod tests {
         let cmd = Cli::command();
         assert!(cmd.get_version().is_some());
     }
+
+    // ── JSON helpers ──────────────────────────────────────────────────
+
+    #[test]
+    fn json_escape_basic_specials() {
+        assert_eq!(json_escape("\""), "\\\"");
+        assert_eq!(json_escape("\\"), "\\\\");
+        assert_eq!(json_escape("\n"), "\\n");
+        assert_eq!(json_escape("\r"), "\\r");
+        assert_eq!(json_escape("\t"), "\\t");
+        assert_eq!(json_escape("\u{08}"), "\\b");
+        assert_eq!(json_escape("\u{0C}"), "\\f");
+    }
+
+    #[test]
+    fn json_escape_passes_printable_ascii_through() {
+        assert_eq!(json_escape("hello world"), "hello world");
+        assert_eq!(json_escape("a/b:c-d_e.f"), "a/b:c-d_e.f");
+    }
+
+    #[test]
+    fn json_escape_emits_unicode_for_other_control_chars() {
+        // U+0001 isn't in the named-escape list; it should be \u-encoded.
+        assert_eq!(json_escape("\u{01}"), "\\u0001");
+    }
+
+    #[test]
+    fn json_string_wraps_with_quotes() {
+        assert_eq!(json_string("hi"), "\"hi\"");
+        assert_eq!(json_string("a\"b"), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn json_message_data_shape() {
+        assert_eq!(json_message_data("done"), "{\"message\":\"done\"}");
+        assert_eq!(
+            json_message_data("with\nnewline"),
+            "{\"message\":\"with\\nnewline\"}"
+        );
+    }
+
+    // ── error_kind covers every TccError variant ──────────────────────
+
+    #[test]
+    fn error_kind_maps_every_variant() {
+        use std::path::PathBuf;
+        let cases: &[(TccError, &str)] = &[
+            (
+                TccError::DbOpen {
+                    path: PathBuf::from("/x"),
+                    source: "s".into(),
+                },
+                "DbOpen",
+            ),
+            (
+                TccError::NotFound {
+                    service: "s".into(),
+                    client: "c".into(),
+                },
+                "NotFound",
+            ),
+            (
+                TccError::NeedsRoot {
+                    message: "m".into(),
+                },
+                "NeedsRoot",
+            ),
+            (TccError::UnknownService("x".into()), "UnknownService"),
+            (
+                TccError::AmbiguousService {
+                    input: "x".into(),
+                    matches: vec!["a".into()],
+                },
+                "AmbiguousService",
+            ),
+            (TccError::QueryFailed("q".into()), "QueryFailed"),
+            (TccError::SchemaInvalid("s".into()), "SchemaInvalid"),
+            (TccError::HomeDirNotFound, "HomeDirNotFound"),
+            (TccError::WriteFailed("w".into()), "WriteFailed"),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(error_kind(err), *expected, "wrong kind for {:?}", err);
+        }
+    }
 }
 
 fn error_kind(error: &TccError) -> &'static str {
