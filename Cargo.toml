@@ -7,8 +7,7 @@ license = "MIT"
 repository = "https://github.com/uinaf/tccutil"
 homepage = "https://github.com/uinaf/tccutil"
 readme = "README.md"
-# This is a binary crate; not intended for crates.io. release-plz reads this
-# to skip `cargo publish` on release.
+# Binary crate, not intended for crates.io.
 publish = false
 
 [[bin]]

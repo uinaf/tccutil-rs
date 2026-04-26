@@ -1,24 +1,24 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-
-permissions:
-  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    # Skip the verify suite on bot-authored bump commits (release-plz Release
-    # PR merges are not [skip ci] commits, so they still run; this guard is
-    # defense-in-depth in case a future automated commit lands on main).
-    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+  verify:
+    # Skip the bot-authored bump commit's `[skip ci]` push. PR runs always go
+    # through (no `head_commit` on pull_request events; gating on event_name
+    # avoids the null-deref that would otherwise prevent the job scheduling).
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]') }}
+    name: Verify
     runs-on: macos-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,3 +47,105 @@ jobs:
 
       - name: Build release
         run: cargo build --release
+
+  # Push-to-main release. semantic-release decides the next version from
+  # Conventional Commits since the last `v*` tag, runs scripts/release-
+  # prepare.sh to bump Cargo.toml + Cargo.lock, commits the bump back to
+  # main with [skip ci], creates the GitHub Release, then we build dual-arch
+  # macOS tarballs and bump the Homebrew formula on uinaf/homebrew-tap.
+  #
+  # Mirrors the shape used by uinaf/react-json-logic.
+  release:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]') }}
+    name: Release
+    needs: [verify]
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    concurrency:
+      group: release-${{ github.repository }}-main
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Rust toolchain (with darwin cross-compile targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Setup Node (for semantic-release plugins)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run semantic-release
+        id: release
+        uses: cycjimmy/semantic-release-action@v6
+        with:
+          extra_plugins: |
+            @semantic-release/commit-analyzer
+            @semantic-release/release-notes-generator
+            @semantic-release/exec
+            @semantic-release/git
+            @semantic-release/github
+            conventional-changelog-conventionalcommits
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_AUTHOR_NAME: glitch418x
+          GIT_AUTHOR_EMAIL: 189487110+glitch418x@users.noreply.github.com
+          GIT_COMMITTER_NAME: glitch418x
+          GIT_COMMITTER_EMAIL: 189487110+glitch418x@users.noreply.github.com
+
+      - name: Build dual-arch macOS binaries
+        if: steps.release.outputs.new_release_published == 'true'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Package release artifacts
+        if: steps.release.outputs.new_release_published == 'true'
+        run: |
+          VERSION="${{ steps.release.outputs.new_release_version }}"
+          mkdir -p dist/arm64 dist/amd64
+          cp target/aarch64-apple-darwin/release/tccutil-rs dist/arm64/tccutil-rs
+          cp target/x86_64-apple-darwin/release/tccutil-rs dist/amd64/tccutil-rs
+          chmod +x dist/arm64/tccutil-rs dist/amd64/tccutil-rs
+
+          tar -C dist/arm64 -czf "tccutil-rs_v${VERSION}_darwin-arm64.tar.gz" tccutil-rs
+          tar -C dist/amd64 -czf "tccutil-rs_v${VERSION}_darwin-amd64.tar.gz" tccutil-rs
+
+          shasum -a 256 \
+            "tccutil-rs_v${VERSION}_darwin-arm64.tar.gz" \
+            "tccutil-rs_v${VERSION}_darwin-amd64.tar.gz" \
+            > checksums.txt
+
+      - name: Attach assets to GitHub Release
+        # semantic-release already created the Release with changelog notes;
+        # this step appends the binaries and checksums to the same Release.
+        if: steps.release.outputs.new_release_published == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.new_release_git_tag }}
+          generate_release_notes: false
+          files: |
+            tccutil-rs_v*_darwin-arm64.tar.gz
+            tccutil-rs_v*_darwin-amd64.tar.gz
+            checksums.txt
+
+      - name: Bump Homebrew formula on uinaf/homebrew-tap
+        # Computes the tarball sha256 from the GitHub-hosted release archive,
+        # rewrites Formula/tccutil-rs.rb on the tap, and opens a PR. Runs
+        # after the assets are attached so the action can fetch them.
+        if: steps.release.outputs.new_release_published == 'true'
+        uses: dawidd6/action-homebrew-bump-formula@v5
+        with:
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          tap: uinaf/homebrew-tap
+          formula: tccutil-rs
+          tag: ${{ steps.release.outputs.new_release_git_tag }}

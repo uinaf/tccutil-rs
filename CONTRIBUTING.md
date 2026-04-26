@@ -51,17 +51,25 @@ After install, every `git push` runs `scripts/verify.sh` and fails the push if a
 
 ## Releases
 
-Push-to-main, two-stage:
+Push-to-main, semantic-release driven. Mirrors the [`uinaf/react-json-logic`](https://github.com/uinaf/react-json-logic) setup.
 
-1. **`release-plz`** watches `main` for Conventional Commits. When `feat:` or `fix:` lands, it opens (or refreshes) a Release PR titled `chore: release v<next>` that bumps `Cargo.toml` and writes `CHANGELOG.md`. Maintainers review and merge.
-2. **Merging the Release PR** triggers `release-plz release`, which creates the `v<next>` tag and a GitHub Release with the changelog as the body. The tag push then runs `.github/workflows/release.yml`, which builds dual-arch macOS tarballs, attaches them + `checksums.txt` to the GitHub Release, and opens a PR against [`uinaf/homebrew-tap`](https://github.com/uinaf/homebrew-tap) to bump `Formula/tccutil-rs.rb`.
+When a `feat:` or `fix:` lands on `main`, the `release` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs after `verify` passes and:
+
+1. **`semantic-release`** analyzes commits since the last `v*` tag and decides the next version.
+2. **`scripts/release-prepare.sh`** bumps `Cargo.toml` + `Cargo.lock` to the new version (via `@semantic-release/exec`).
+3. **`@semantic-release/git`** commits those files back to `main` as `chore(release): <version> [skip ci]` (the `[skip ci]` keeps the bump from re-triggering the pipeline).
+4. **`@semantic-release/github`** creates the `v<version>` tag and the GitHub Release with the changelog as the body.
+5. **macOS dual-arch build** runs in the same job, attaching tarballs + `checksums.txt` to the new Release.
+6. **`dawidd6/action-homebrew-bump-formula`** opens a PR against [`uinaf/homebrew-tap`](https://github.com/uinaf/homebrew-tap) bumping `Formula/tccutil-rs.rb`.
+
+Bot identity is `glitch418x` (set inside the semantic-release step's `env:`).
 
 Required secrets on this repo:
 
-- `RELEASE_PLZ_TOKEN` — fine-grained PAT for the bot account (`glitch418x`) with `contents: write` and `pull-requests: write` on this repo. Needed instead of the default `GITHUB_TOKEN` so PRs opened by release-plz trigger downstream workflows.
-- `TAP_GITHUB_TOKEN` — fine-grained PAT for the bot account with `contents: write` and `pull-requests: write` on `uinaf/homebrew-tap`.
+- `GITHUB_TOKEN` — provided automatically. Used by semantic-release for the bump-back commit, tag, and Release.
+- `TAP_GITHUB_TOKEN` — fine-grained PAT for `glitch418x` with `contents: write` and `pull-requests: write` on `uinaf/homebrew-tap`. The default `GITHUB_TOKEN` only has scope on this repo.
 
-`chore:` / `docs:` / `refactor:` commits do not bump the version on their own — land them alongside a `feat:` or `fix:` if you want them in a release.
+`chore:` / `docs:` / `refactor:` commits do not bump the version on their own — land them alongside a `feat:` or `fix:` if you want them in a release. `feat!:` / `BREAKING CHANGE:` bumps the major.
 
 ## Pull requests
 
