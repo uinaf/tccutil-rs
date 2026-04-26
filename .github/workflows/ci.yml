@@ -151,13 +151,48 @@ jobs:
             checksums.txt
 
       - name: Bump Homebrew formula on uinaf/homebrew-tap
-        # Computes the tarball sha256 from the GitHub-hosted release archive,
-        # rewrites Formula/tccutil-rs.rb on the tap, and opens a PR. Runs
-        # after the assets are attached so the action can fetch them.
+        # Mirrors the GoReleaser-driven flow used by uinaf/healthd: clone
+        # the tap with TAP_GITHUB_TOKEN, sed the formula in place, push
+        # straight to the tap's main branch. No fork, no PR, no OAuth-scope
+        # gymnastics — works with a fine-grained PAT scoped only to the
+        # tap repo. Runs after assets are attached so the sha256s in
+        # checksums.txt match what's actually on the Release.
         if: steps.release.outputs.new_release_published == 'true'
-        uses: dawidd6/action-homebrew-bump-formula@v5
-        with:
-          token: ${{ secrets.TAP_GITHUB_TOKEN }}
-          tap: uinaf/homebrew-tap
-          formula: tccutil-rs
-          tag: ${{ steps.release.outputs.new_release_git_tag }}
+        env:
+          VERSION: ${{ steps.release.outputs.new_release_version }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ARM64_SHA=$(awk '/_darwin-arm64\.tar\.gz$/ { print $1 }' checksums.txt)
+          AMD64_SHA=$(awk '/_darwin-amd64\.tar\.gz$/ { print $1 }' checksums.txt)
+          [ -n "$ARM64_SHA" ] && [ -n "$AMD64_SHA" ] || { echo "missing checksums" >&2; exit 1; }
+
+          git clone --depth=1 \
+            "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/uinaf/homebrew-tap.git" \
+            tap
+          cd tap
+
+          F=Formula/tccutil-rs.rb
+          # Replace version, urls, sha256s. The sha256 lines are matched in
+          # block order: arm64 block comes before amd64 in the formula.
+          awk -v v="$VERSION" -v arm="$ARM64_SHA" -v amd="$AMD64_SHA" '
+            /^  version "/ { print "  version \"" v "\""; next }
+            /tccutil-rs_v[0-9.]+_darwin-arm64\.tar\.gz/ {
+              gsub(/v[0-9]+\.[0-9]+\.[0-9]+/, "v" v); print; next
+            }
+            /tccutil-rs_v[0-9.]+_darwin-amd64\.tar\.gz/ {
+              gsub(/v[0-9]+\.[0-9]+\.[0-9]+/, "v" v); print; next
+            }
+            !done_arm && /sha256 "[a-f0-9]+"/ {
+              sub(/"[a-f0-9]+"/, "\"" arm "\""); done_arm=1; print; next
+            }
+            done_arm && !done_amd && /sha256 "[a-f0-9]+"/ {
+              sub(/"[a-f0-9]+"/, "\"" amd "\""); done_amd=1; print; next
+            }
+            { print }
+          ' "$F" > "$F.new"
+          mv "$F.new" "$F"
+
+          git -c user.name=glitch418x -c user.email=189487110+glitch418x@users.noreply.github.com \
+            commit -am "tccutil-rs ${VERSION}"
+          git push origin main
