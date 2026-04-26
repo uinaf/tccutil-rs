@@ -73,6 +73,14 @@ jobs:
     concurrency:
       group: release-${{ github.repository }}-main
       cancel-in-progress: false
+    # Expose semantic-release's outputs so the downstream `update-homebrew-tap`
+    # job (on ubuntu, since Justintime50/homebrew-releaser is a Docker action
+    # and Docker actions don't run on macOS) can gate on whether a release
+    # was actually published.
+    outputs:
+      new_release_published: ${{ steps.release.outputs.new_release_published }}
+      new_release_version: ${{ steps.release.outputs.new_release_version }}
+      new_release_git_tag: ${{ steps.release.outputs.new_release_git_tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -150,15 +158,18 @@ jobs:
             tccutil-rs_v*_darwin-amd64.tar.gz
             checksums.txt
 
-      - name: Update Homebrew tap
-        # Same action putdotio/putio-cli uses. Reads our release assets, picks
-        # the ones whose filename ends with `darwin-arm64.tar.gz` /
-        # `darwin-amd64.tar.gz`, regenerates the formula, and pushes straight
-        # to uinaf/homebrew-tap's main branch — no fork, no PR. Now that the
-        # repo is named `tccutil-rs`, Formula/tccutil-rs.rb is what the action
-        # writes by default (it derives the formula filename from the repo
-        # name), so no overrides are needed.
-        if: steps.release.outputs.new_release_published == 'true'
+# Justintime50/homebrew-releaser is a Docker-based action and Docker actions
+# only run on Linux, so the tap update lives in its own ubuntu-latest job.
+# Same split putdotio/putio-cli uses. Runs after `release` so the GitHub
+# Release with darwin tarballs already exists when the action scans assets.
+  update-homebrew-tap:
+    if: needs.release.outputs.new_release_published == 'true'
+    name: Update Homebrew tap
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Release to Homebrew tap
         uses: Justintime50/homebrew-releaser@v3
         with:
           homebrew_owner: uinaf
