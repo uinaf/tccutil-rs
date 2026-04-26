@@ -80,10 +80,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Install Rust toolchain (with darwin cross-compile targets)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Install Rust toolchain (from rust-toolchain.toml + darwin cross-compile targets)
+        # `rustup show` installs the channel pinned in rust-toolchain.toml
+        # (1.93). The `target add` calls then attach the cross-compile
+        # targets to that *same* pinned toolchain — using
+        # dtolnay/rust-toolchain@stable here would install targets onto a
+        # different toolchain (stable) than the one cargo actually uses
+        # when it sees rust-toolchain.toml, which silently fails the build.
+        run: |
+          rustup show
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Setup Node (for semantic-release plugins)
         uses: actions/setup-node@v4
