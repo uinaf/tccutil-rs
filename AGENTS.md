@@ -31,3 +31,6 @@ Single binary, two source files. Reads both user (`~/Library/Application Support
 - `scripts/verify.sh` — Single canonical gate. CI calls it; the pre-push hook calls it; run it locally before opening a PR
 - `Cargo.toml` — Dependencies and package metadata
 - `rust-toolchain.toml` — Pinned toolchain channel
+- `.releaserc.json` — semantic-release config (Conventional Commits → version + tag + GitHub Release). See [CONTRIBUTING.md → Releases](CONTRIBUTING.md#releases)
+- `scripts/release-prepare.sh` — Bumps `Cargo.toml` + `Cargo.lock` during the release pipeline (invoked by `@semantic-release/exec`)
+- `.github/workflows/ci.yml` — Single workflow with `verify` (PR + push) and `release` jobs (push to `main`, runs semantic-release + dual-arch macOS build + Homebrew tap bump)
