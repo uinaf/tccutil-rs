@@ -150,22 +150,20 @@ jobs:
             tccutil-rs_v*_darwin-amd64.tar.gz
             checksums.txt
 
-      - name: Update Homebrew tap
-        # Same action putdotio/putio-cli uses. Pushes the regenerated
-        # formula straight to uinaf/homebrew-tap's main branch — no fork,
-        # no PR, works with a fine-grained PAT scoped only to the tap.
+      - name: Bump Homebrew formula on uinaf/homebrew-tap
+        # `no_fork: true` is the difference vs. the original failing config:
+        # the action no longer tries to fork the tap into glitch418x's
+        # personal namespace (which the fine-grained PAT can't access).
+        # `formula: tccutil-rs` overrides the default repo-name derivation
+        # so it updates Formula/tccutil-rs.rb (binary name, not repo name).
+        # We don't use Justintime50/homebrew-releaser because it can't
+        # override either the formula filename or the asset URL pattern,
+        # both of which differ from the repo name in our case.
         if: steps.release.outputs.new_release_published == 'true'
-        uses: Justintime50/homebrew-releaser@v3
+        uses: dawidd6/action-homebrew-bump-formula@v5
         with:
-          homebrew_owner: uinaf
-          homebrew_tap: homebrew-tap
-          github_token: ${{ secrets.TAP_GITHUB_TOKEN }}
-          commit_owner: glitch418x
-          commit_email: 189487110+glitch418x@users.noreply.github.com
-          branch: main
-          formula_folder: Formula
-          install: 'bin.install "tccutil-rs"'
-          test: |
-            assert_match "Manage macOS TCC permissions", shell_output("#{bin}/tccutil-rs --help")
-          target_darwin_arm64: true
-          target_darwin_amd64: true
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          tap: uinaf/homebrew-tap
+          formula: tccutil-rs
+          tag: ${{ steps.release.outputs.new_release_git_tag }}
+          no_fork: true
