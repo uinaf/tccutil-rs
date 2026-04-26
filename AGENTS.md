@@ -31,3 +31,6 @@ Single binary, two source files. Reads both user (`~/Library/Application Support
 - `scripts/verify.sh` — Single canonical gate. CI calls it; the pre-push hook calls it; run it locally before opening a PR
 - `Cargo.toml` — Dependencies and package metadata
 - `rust-toolchain.toml` — Pinned toolchain channel
+- `release-plz.toml` — Push-to-main version manager config (Conventional Commits → Release PR → tag + GitHub Release). See [CONTRIBUTING.md → Releases](CONTRIBUTING.md#releases)
+- `.github/workflows/release-plz.yml` — Runs release-plz on push to `main`
+- `.github/workflows/release.yml` — Tag-triggered: builds dual-arch macOS tarballs and bumps `uinaf/homebrew-tap`

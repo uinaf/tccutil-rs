@@ -8,11 +8,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
+    # Skip the verify suite on bot-authored bump commits (release-plz Release
+    # PR merges are not [skip ci] commits, so they still run; this guard is
+    # defense-in-depth in case a future automated commit lands on main).
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         run: rustup show

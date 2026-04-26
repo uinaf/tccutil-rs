@@ -49,6 +49,20 @@ After install, every `git push` runs `scripts/verify.sh` and fails the push if a
 - Table output in `src/main.rs` does manual ANSI-aware padding. If you touch it, run `tccutil-rs list` against a real TCC.db to eyeball alignment.
 - Integration tests in `tests/integration.rs` exec the real binary via `CARGO_BIN_EXE_tccutil-rs`. Unit tests in `src/tcc.rs` round-trip real SQLite via `tempfile`. No mocks.
 
+## Releases
+
+Push-to-main, two-stage:
+
+1. **`release-plz`** watches `main` for Conventional Commits. When `feat:` or `fix:` lands, it opens (or refreshes) a Release PR titled `chore: release v<next>` that bumps `Cargo.toml` and writes `CHANGELOG.md`. Maintainers review and merge.
+2. **Merging the Release PR** triggers `release-plz release`, which creates the `v<next>` tag and a GitHub Release with the changelog as the body. The tag push then runs `.github/workflows/release.yml`, which builds dual-arch macOS tarballs, attaches them + `checksums.txt` to the GitHub Release, and opens a PR against [`uinaf/homebrew-tap`](https://github.com/uinaf/homebrew-tap) to bump `Formula/tccutil-rs.rb`.
+
+Required secrets on this repo:
+
+- `RELEASE_PLZ_TOKEN` — fine-grained PAT for the bot account (`glitch418x`) with `contents: write` and `pull-requests: write` on this repo. Needed instead of the default `GITHUB_TOKEN` so PRs opened by release-plz trigger downstream workflows.
+- `TAP_GITHUB_TOKEN` — fine-grained PAT for the bot account with `contents: write` and `pull-requests: write` on `uinaf/homebrew-tap`.
+
+`chore:` / `docs:` / `refactor:` commits do not bump the version on their own — land them alongside a `feat:` or `fix:` if you want them in a release.
+
 ## Pull requests
 
 - Keep changes focused — a single concern per PR.

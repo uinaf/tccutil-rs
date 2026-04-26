@@ -1,5 +1,15 @@
 name: Release
 
+# Tag-driven binary build and Homebrew tap update.
+#
+# Triggered by tags pushed by the release-plz workflow on main when a Release
+# PR is merged. Builds dual-arch macOS tarballs, attaches them + checksums.txt
+# to the GitHub Release that release-plz pre-created, then opens a PR against
+# uinaf/homebrew-tap to bump Formula/tccutil-rs.rb.
+#
+# The job is intentionally NOT triggered on push to main directly — the
+# version decision is owned by release-plz, never by this workflow.
+
 on:
   push:
     tags: ["v*"]
@@ -40,11 +50,25 @@ jobs:
             "tccutil-rs_v${VERSION}_darwin-amd64.tar.gz" \
             > checksums.txt
 
-      - name: Create GitHub Release
+      - name: Attach assets to GitHub Release
+        # release-plz already created the Release with changelog notes; this
+        # step appends the binaries and checksums to the same Release.
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          # Don't overwrite the changelog body that release-plz wrote.
+          generate_release_notes: false
           files: |
             tccutil-rs_v*_darwin-arm64.tar.gz
             tccutil-rs_v*_darwin-amd64.tar.gz
             checksums.txt
+
+      - name: Bump Homebrew formula on uinaf/homebrew-tap
+        # Computes the tarball sha256 from the GitHub-hosted release archive,
+        # rewrites Formula/tccutil-rs.rb on the tap, and opens a PR. Runs
+        # after the assets are attached so the action can fetch them.
+        uses: dawidd6/action-homebrew-bump-formula@v5
+        with:
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          tap: uinaf/homebrew-tap
+          formula: tccutil-rs
+          tag: ${{ github.ref_name }}
