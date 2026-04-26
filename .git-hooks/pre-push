@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Pre-push gate: defers to scripts/verify.sh so CI and local share one source of truth.
+# Install: scripts/setup-hooks.sh
+exec "$(git rev-parse --show-toplevel)/scripts/verify.sh"

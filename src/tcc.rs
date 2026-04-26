@@ -119,9 +119,13 @@ fn tcc_open_access_denied_hint(path: &Path, source: &str) -> Option<String> {
     }
 
     let source_lower = source.to_lowercase();
+    // SQLite on macOS reports "unable to open database file" when TCC blocks
+    // a process without Full Disk Access, in addition to the explicit
+    // "authorization denied" / "not authorized" surfaces seen on some versions.
     let is_open_denied = source_lower.contains("authorization denied")
         || source_lower.contains("open authorization denied")
-        || source_lower.contains("not authorized");
+        || source_lower.contains("not authorized")
+        || source_lower.contains("unable to open database file");
     if !is_open_denied {
         return None;
     }
@@ -290,26 +294,37 @@ impl TccDb {
         service_filter: Option<&str>,
     ) -> Result<Vec<TccEntry>, TccError> {
         let mut entries = Vec::new();
+        let mut attempted = 0usize;
+        let mut errors: Vec<TccError> = Vec::new();
 
         if self.target == DbTarget::Default || self.target == DbTarget::User {
+            attempted += 1;
             match Self::read_db(&self.user_db_path, false, !self.suppress_warnings) {
                 Ok(mut e) => entries.append(&mut e),
-                Err(e) => {
-                    if !self.suppress_warnings {
-                        eprintln!("Warning: {}", e);
-                    }
-                }
+                Err(e) => errors.push(e),
             }
         }
 
         if self.target == DbTarget::Default {
+            attempted += 1;
             match Self::read_db(&self.system_db_path, true, !self.suppress_warnings) {
                 Ok(mut e) => entries.append(&mut e),
-                Err(e) => {
-                    if !self.suppress_warnings {
-                        eprintln!("Warning: {}", e);
-                    }
-                }
+                Err(e) => errors.push(e),
+            }
+        }
+
+        // Every DB we tried failed to open. Surface that as a hard error so
+        // JSON consumers don't silently treat "blocked by FDA" as "no entries".
+        // The caller is responsible for displaying it — don't also stderr-warn.
+        if attempted > 0 && errors.len() == attempted {
+            return Err(errors.into_iter().next().unwrap());
+        }
+
+        // At least one DB succeeded. Surface the partial failures as warnings
+        // so the user knows the result is incomplete, then return what we got.
+        if !self.suppress_warnings {
+            for e in &errors {
+                eprintln!("Warning: {}", e);
             }
         }
 
@@ -923,10 +938,25 @@ mod tests {
     }
 
     #[test]
-    fn db_open_non_auth_error_on_tcc_path_does_not_include_hint() {
+    fn db_open_unable_to_open_on_tcc_path_includes_fda_hint() {
+        // Real-world case: SQLite reports "unable to open database file" when
+        // FDA blocks the process. The hint must fire here.
         let err = TccError::DbOpen {
             path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
-            source: "unable to open database file".to_string(),
+            source:
+                "unable to open database file: /Library/Application Support/com.apple.TCC/TCC.db"
+                    .to_string(),
+        };
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("Full Disk Access"));
+    }
+
+    #[test]
+    fn db_open_unrelated_error_on_tcc_path_does_not_include_hint() {
+        let err = TccError::DbOpen {
+            path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
+            source: "file is not a database".to_string(),
         };
 
         let rendered = err.to_string();
@@ -983,6 +1013,88 @@ mod tests {
         let filtered = filter_entries(entries, None, Some("Camer"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].service_raw, "kTCCServiceCamera");
+    }
+
+    // ── list error semantics (all-fail vs partial-fail) ───────────────
+
+    #[test]
+    fn list_returns_err_when_every_targeted_db_fails_to_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bad_user = dir.path().join("user.db");
+        let bad_system = dir.path().join("system.db");
+        // Files exist but contain no SQLite database, so reads fail rather
+        // than returning Ok(empty) (which is what a non-existent path does).
+        std::fs::write(&bad_user, b"not a tcc db").expect("write user");
+        std::fs::write(&bad_system, b"not a tcc db").expect("write system");
+
+        let mut db = TccDb::with_paths(bad_user, bad_system, DbTarget::Default);
+        db.set_suppress_warnings(true);
+
+        let result = db.list(None, None);
+        assert!(
+            result.is_err(),
+            "list must error when every targeted DB fails (regression: would silently return Ok(empty) and JSON consumers couldn't tell apart 'no entries' from 'unreadable DB')"
+        );
+    }
+
+    /// Build a valid TCC.db with the production schema at `path`.
+    fn build_valid_tcc_db(path: &Path) {
+        let conn = Connection::open(path).expect("create db");
+        conn.execute_batch(
+            "CREATE TABLE access (
+                service TEXT NOT NULL,
+                client TEXT NOT NULL,
+                client_type INTEGER NOT NULL,
+                auth_value INTEGER NOT NULL DEFAULT 0,
+                auth_reason INTEGER NOT NULL DEFAULT 0,
+                auth_version INTEGER NOT NULL DEFAULT 1,
+                flags INTEGER NOT NULL DEFAULT 0,
+                last_modified INTEGER DEFAULT 0,
+                PRIMARY KEY (service, client, client_type)
+            );",
+        )
+        .expect("schema");
+    }
+
+    #[test]
+    fn list_returns_ok_with_partial_results_when_one_db_succeeds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let good_user = dir.path().join("user.db");
+        let bad_system = dir.path().join("system.db");
+        build_valid_tcc_db(&good_user);
+        std::fs::write(&bad_system, b"not a tcc db").expect("write system");
+
+        let mut db = TccDb::with_paths(good_user, bad_system, DbTarget::Default);
+        db.set_suppress_warnings(true);
+
+        let result = db.list(None, None);
+        assert!(
+            result.is_ok(),
+            "partial success should still return Ok, got {:?}",
+            result.err()
+        );
+        assert_eq!(
+            result.unwrap().len(),
+            0,
+            "user DB is empty, expected 0 entries"
+        );
+    }
+
+    #[test]
+    fn list_partial_failure_emits_warning_when_warnings_enabled() {
+        // Same scenario as the partial-success test, but with warnings enabled
+        // so the per-failure stderr branch is exercised. The visible side
+        // effect is a warning on stderr (captured by cargo test); the
+        // observable contract is that the function still returns Ok.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let good_user = dir.path().join("user.db");
+        let bad_system = dir.path().join("system.db");
+        build_valid_tcc_db(&good_user);
+        std::fs::write(&bad_system, b"not a tcc db").expect("write system");
+
+        let db = TccDb::with_paths(good_user, bad_system, DbTarget::Default);
+        let result = db.list(None, None);
+        assert!(result.is_ok(), "partial success should return Ok");
     }
 
     #[test]

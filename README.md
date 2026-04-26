@@ -30,6 +30,8 @@ curl -sSL https://raw.githubusercontent.com/uinaf/tccutil/main/scripts/install.s
 
 ### Source build
 
+The Rust toolchain is pinned in `rust-toolchain.toml`; rustup auto-installs it on first `cargo` invocation.
+
 ```sh
 cargo build --release
 install -m 0755 target/release/tccutil-rs /usr/local/bin/tccutil-rs
@@ -184,9 +186,22 @@ Reset Accessibility for /usr/local/bin/my-tool (system database)
 | Flag | Description |
 |------|-------------|
 | `--user`, `-u` | Operate on the per-user database instead of the system database |
-| `--compact` | Show binary names instead of full paths (list only) |
+| `--json`, `-j` | Emit a machine-readable JSON envelope instead of human-formatted output |
 | `--help`, `-h` | Print help |
 | `--version`, `-V` | Print version |
+
+`list` also accepts `--compact` / `-c` to show binary names instead of full paths.
+
+## JSON output
+
+Every command accepts `--json`. On success and on failure the response is a single envelope on stdout (stderr stays empty) with the same shape, so scripts and agents can parse one structure:
+
+```json
+{ "ok": true,  "command": "list",  "data": { "count": 3, "entries": [ ... ] }, "error": null }
+{ "ok": false, "command": "grant", "data": null, "error": { "kind": "UnknownService", "message": "..." } }
+```
+
+Error `kind` is one of `DbOpen`, `NotFound`, `NeedsRoot`, `UnknownService`, `AmbiguousService`, `QueryFailed`, `SchemaInvalid`, `HomeDirNotFound`, `WriteFailed`, or `ParseError` (clap parse failures).
 
 ## SIP limitations
 
@@ -222,6 +237,20 @@ If you see an authorization-denied error opening `TCC.db`, grant **Full Disk Acc
 | macOS version support | Current | 10.9–14 | 15+ |
 
 > ⚠️ Write commands (`grant`, `revoke`, `enable`, `disable`) modify the TCC database directly. The **user database** is writable without disabling SIP. The **system database** requires `sudo` and works for most operations on recent macOS. Unlike `tccutil.py`, `tccutil-rs` does **not** require SIP to be disabled — but some system-level writes may still be restricted by macOS. Disabling SIP is generally **not recommended** as it removes important security protections.
+
+## Docs
+
+- [Contributing](CONTRIBUTING.md) — Set up a dev environment, run validation, and open a pull request.
+- [Security](SECURITY.md) — Private-first vulnerability reporting.
+- [Agent guide](AGENTS.md) — What an agent needs to know to work in this repo.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+See [SECURITY.md](SECURITY.md). Report vulnerabilities privately to `dev@uinaf.dev`.
 
 ## License
 

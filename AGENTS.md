@@ -2,11 +2,15 @@
 
 Rust CLI for managing macOS TCC (Transparency, Consent, and Control) privacy permissions databases. Replaces Apple's limited `tccutil` and the Python-based `tccutil.py` with a single static binary — no runtime dependencies.
 
-macOS hides non-app-bundle clients (CLI tools, scripts) from the Privacy & Security UI, and Apple's `tccutil` only supports `reset`. This tool gives full read/write access to both user and system TCC.db files: list, grant, revoke, enable, disable, and reset individual entries.
+This file is the agent navigation map. Each section is a pointer:
+
+- User-facing usage, install, commands, JSON envelope → [README.md](README.md)
+- Contributor setup, validation, conventions, PR expectations → [CONTRIBUTING.md](CONTRIBUTING.md)
+- Vulnerability reporting → [SECURITY.md](SECURITY.md)
 
 ## Tech stack
 
-- **Rust 2024 edition** (`edition = "2024"` in Cargo.toml)
+- **Rust 2024 edition** (`edition = "2024"` in Cargo.toml; toolchain pinned in `rust-toolchain.toml`)
 - **rusqlite** (bundled SQLite) — reads/writes TCC.db directly
 - **clap** (derive) — CLI argument parsing
 - **colored** — terminal output formatting
@@ -14,16 +18,6 @@ macOS hides non-app-bundle clients (CLI tools, scripts) from the Privacy & Secur
 - **sha1_smol** — schema digest verification
 - **dirs** — home directory resolution
 - **libc** — root/euid check
-
-## Build / Test / Install
-
-```sh
-cargo build --release          # binary at target/release/tccutil-rs
-cargo test                     # unit + integration tests
-cargo clippy                   # lint
-cargo fmt                      # format
-cp target/release/tccutil-rs /opt/homebrew/bin/tccutil-rs  # install
-```
 
 ## Architecture
 
@@ -33,18 +27,7 @@ Single binary, two source files. Reads both user (`~/Library/Application Support
 
 - `src/main.rs` — CLI definition (clap derive), subcommand dispatch, table output formatting
 - `src/tcc.rs` — Core logic: `TccDb` struct, DB reads/writes, service name mapping (`SERVICE_MAP`), schema validation, timestamp formatting
-- `tests/integration.rs` — Integration tests
+- `tests/integration.rs` — Integration tests; exec the real binary via `CARGO_BIN_EXE_tccutil-rs`
+- `scripts/verify.sh` — Single canonical gate. CI calls it; the pre-push hook calls it; run it locally before opening a PR
 - `Cargo.toml` — Dependencies and package metadata
-
-## Commands
-
-`list`, `grant`, `revoke`, `enable`, `disable`, `reset`, `services`, `info`
-
-Service names accept both human-readable (`Accessibility`) and internal (`kTCCServiceAccessibility`) forms.
-
-## Conventions
-
-- Conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`)
-- No `unsafe` (except the one `libc::geteuid()` call for root detection)
-- Errors return `Result<String, String>` — no panics in library code
-- Table output uses manual column-width calculation with ANSI-aware padding
+- `rust-toolchain.toml` — Pinned toolchain channel
