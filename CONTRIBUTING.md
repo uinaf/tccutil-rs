@@ -5,7 +5,7 @@ Thanks for sending changes.
 ## Setup
 
 ```sh
-git clone git@github.com:uinaf/tccutil.git
+git clone git@github.com:uinaf/tccutil-rs.git
 cd tccutil
 cargo build --release
 ```

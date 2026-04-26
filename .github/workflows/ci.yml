@@ -150,14 +150,26 @@ jobs:
             tccutil-rs_v*_darwin-amd64.tar.gz
             checksums.txt
 
-      - name: Bump Homebrew formula on uinaf/homebrew-tap
-        # Computes the tarball sha256 from the GitHub-hosted release archive,
-        # rewrites Formula/tccutil-rs.rb on the tap, and opens a PR. Runs
-        # after the assets are attached so the action can fetch them.
+      - name: Update Homebrew tap
+        # Same action putdotio/putio-cli uses. Reads our release assets, picks
+        # the ones whose filename ends with `darwin-arm64.tar.gz` /
+        # `darwin-amd64.tar.gz`, regenerates the formula, and pushes straight
+        # to uinaf/homebrew-tap's main branch — no fork, no PR. Now that the
+        # repo is named `tccutil-rs`, Formula/tccutil-rs.rb is what the action
+        # writes by default (it derives the formula filename from the repo
+        # name), so no overrides are needed.
         if: steps.release.outputs.new_release_published == 'true'
-        uses: dawidd6/action-homebrew-bump-formula@v5
+        uses: Justintime50/homebrew-releaser@v3
         with:
-          token: ${{ secrets.TAP_GITHUB_TOKEN }}
-          tap: uinaf/homebrew-tap
-          formula: tccutil-rs
-          tag: ${{ steps.release.outputs.new_release_git_tag }}
+          homebrew_owner: uinaf
+          homebrew_tap: homebrew-tap
+          github_token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          commit_owner: glitch418x
+          commit_email: 189487110+glitch418x@users.noreply.github.com
+          branch: main
+          formula_folder: Formula
+          install: 'bin.install "tccutil-rs"'
+          test: |
+            assert_match "Manage macOS TCC permissions", shell_output("#{bin}/tccutil-rs --help")
+          target_darwin_arm64: true
+          target_darwin_amd64: true

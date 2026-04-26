@@ -25,7 +25,7 @@ brew install tccutil-rs
 ### Direct install
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/uinaf/tccutil/main/scripts/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/uinaf/tccutil-rs/main/scripts/install.sh | sh
 ```
 
 ### Source build

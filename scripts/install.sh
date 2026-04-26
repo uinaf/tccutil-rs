@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="uinaf/tccutil"
+REPO="uinaf/tccutil-rs"
 BINARY_NAME="tccutil-rs"
 INSTALL_PATH="/usr/local/bin/${BINARY_NAME}"
 
