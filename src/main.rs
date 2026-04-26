@@ -718,12 +718,30 @@ fn main() {
             if json_mode {
                 emit_json_success("services", json_services_data());
             } else {
-                println!("{:<35}  DESCRIPTION", "INTERNAL NAME");
-                println!("{:<35}  {}", "─".repeat(35), "─".repeat(25));
                 let mut pairs: Vec<_> = SERVICE_MAP.iter().collect();
                 pairs.sort_by_key(|(_, desc)| *desc);
+
+                let hdr_name = "INTERNAL NAME";
+                let hdr_desc = "DESCRIPTION";
+                let name_w = pairs
+                    .iter()
+                    .map(|(k, _)| k.len())
+                    .max()
+                    .unwrap_or(0)
+                    .max(hdr_name.len());
+                let desc_w = pairs
+                    .iter()
+                    .map(|(_, d)| d.len())
+                    .max()
+                    .unwrap_or(0)
+                    .max(hdr_desc.len());
+
+                println!("{:<nw$}  {}", hdr_name, hdr_desc, nw = name_w);
+                println!("{}  {}", "─".repeat(name_w), "─".repeat(desc_w));
                 for (key, desc) in pairs {
-                    println!("{:<35}  {}", key.dimmed(), desc);
+                    // Pad after coloring so ANSI escapes don't consume width.
+                    let pad = name_w.saturating_sub(key.len());
+                    println!("{}{}  {}", key.dimmed(), " ".repeat(pad), desc);
                 }
             }
         }

@@ -1,10 +1,17 @@
 use std::process::Command;
 
 /// Helper: run the `tccutil-rs` binary with given args, returning (stdout, stderr, success).
+///
+/// `HOME` is overridden to a fresh tempdir so the user TCC.db path resolves to
+/// a non-existent file. That way `list --user` returns an empty result without
+/// depending on the host machine's privacy data or Full Disk Access state, and
+/// the test outcome is deterministic across local dev boxes and CI runners.
 fn run_tcc(args: &[&str]) -> (String, String, bool) {
     let bin = env!("CARGO_BIN_EXE_tccutil-rs");
+    let home = tempfile::tempdir().expect("create tempdir for HOME");
     let output = Command::new(bin)
         .args(args)
+        .env("HOME", home.path())
         .output()
         .expect("failed to execute tccutil-rs binary");
 
