@@ -184,3 +184,4 @@ jobs:
             assert_match "Manage macOS TCC permissions", shell_output("#{bin}/tccutil-rs --help")
           target_darwin_arm64: true
           target_darwin_amd64: true
+          skip_checksum: true
