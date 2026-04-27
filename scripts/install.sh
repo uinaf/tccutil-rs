@@ -58,7 +58,8 @@ else
   esac
 fi
 
-asset="${BINARY_NAME}_${version}_${platform}.tar.gz"
+version_no_v="${version#v}"
+asset="${BINARY_NAME}-${version_no_v}-${platform}.tar.gz"
 base_url="https://github.com/${REPO}/releases/download/${version}"
 asset_url="${base_url}/${asset}"
 checksums_url="${base_url}/checksums.txt"

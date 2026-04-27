@@ -137,12 +137,12 @@ jobs:
           cp target/x86_64-apple-darwin/release/tccutil-rs dist/amd64/tccutil-rs
           chmod +x dist/arm64/tccutil-rs dist/amd64/tccutil-rs
 
-          tar -C dist/arm64 -czf "tccutil-rs_v${VERSION}_darwin-arm64.tar.gz" tccutil-rs
-          tar -C dist/amd64 -czf "tccutil-rs_v${VERSION}_darwin-amd64.tar.gz" tccutil-rs
+          tar -C dist/arm64 -czf "tccutil-rs-${VERSION}-darwin-arm64.tar.gz" tccutil-rs
+          tar -C dist/amd64 -czf "tccutil-rs-${VERSION}-darwin-amd64.tar.gz" tccutil-rs
 
           shasum -a 256 \
-            "tccutil-rs_v${VERSION}_darwin-arm64.tar.gz" \
-            "tccutil-rs_v${VERSION}_darwin-amd64.tar.gz" \
+            "tccutil-rs-${VERSION}-darwin-arm64.tar.gz" \
+            "tccutil-rs-${VERSION}-darwin-amd64.tar.gz" \
             > checksums.txt
 
       - name: Attach assets to GitHub Release
@@ -154,8 +154,8 @@ jobs:
           tag_name: ${{ steps.release.outputs.new_release_git_tag }}
           generate_release_notes: false
           files: |
-            tccutil-rs_v*_darwin-arm64.tar.gz
-            tccutil-rs_v*_darwin-amd64.tar.gz
+            tccutil-rs-*-darwin-arm64.tar.gz
+            tccutil-rs-*-darwin-amd64.tar.gz
             checksums.txt
 
 # Justintime50/homebrew-releaser is a Docker-based action and Docker actions
