@@ -45,7 +45,7 @@ After install, every `git push` runs `scripts/verify.sh` and fails the push if a
 
 - Conventional commits — `feat:`, `fix:`, `test:`, `docs:`, `chore:`. CI does not enforce; reviewers do.
 - No `unsafe` outside the single `libc::geteuid()` call in `src/tcc.rs`.
-- Errors return `Result<_, TccError>` — never panic in library code. Add a new variant when an error doesn't fit the existing kinds.
+- Errors return `Result<_, TccError>`. Add a new variant when an error doesn't fit the existing kinds.
 - Table output in `src/main.rs` does manual ANSI-aware padding. If you touch it, run `tccutil-rs list` against a real TCC.db to eyeball alignment.
 - Integration tests in `tests/integration.rs` exec the real binary via `CARGO_BIN_EXE_tccutil-rs`. Unit tests in `src/tcc.rs` round-trip real SQLite via `tempfile`. No mocks.
 
@@ -74,7 +74,7 @@ Required secrets on this repo:
 ## Pull requests
 
 - Keep changes focused — a single concern per PR.
-- Add or update tests when behavior changes. Mock-only tests don't count.
+- Add or update behavior-covering tests when behavior changes.
 - Run `scripts/verify.sh` before pushing.
 - Include the most useful evidence for the kind of change:
   - Command output for new flags or subcommands

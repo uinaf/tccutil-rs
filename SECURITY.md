@@ -27,8 +27,8 @@ Out of scope:
 ## Guidelines
 
 - Test only against TCC databases on machines you control.
-- Do not use real third-party bundle IDs or paths owned by others when reporting.
-- Avoid destructive testing on production machines you depend on.
+- Use only test bundle IDs and paths you own when reporting.
+- Keep testing non-destructive and away from production machines you depend on.
 
 ## Supported versions
 
