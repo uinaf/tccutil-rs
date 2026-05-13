@@ -60,14 +60,14 @@ When a `feat:` or `fix:` lands on `main`, the `release` job in [`.github/workflo
 3. **`@semantic-release/git`** commits those files back to `main` as `chore(release): <version> [skip ci]` (the `[skip ci]` keeps the bump from re-triggering the pipeline).
 4. **`@semantic-release/github`** creates the `v<version>` tag and the GitHub Release with the changelog as the body.
 5. **macOS dual-arch build** runs in the same job, attaching tarballs + `checksums.txt` to the new Release.
-6. **`dawidd6/action-homebrew-bump-formula`** opens a PR against [`uinaf/homebrew-tap`](https://github.com/uinaf/homebrew-tap) bumping `Formula/tccutil-rs.rb`.
+6. **`Justintime50/homebrew-releaser`** updates [`uinaf/homebrew-tap`](https://github.com/uinaf/homebrew-tap) after the GitHub Release has the darwin tarballs.
 
-Bot identity is `glitch418x` (set inside the semantic-release step's `env:`).
+Bot-authored commits use the GitHub Actions bot identity.
 
-Required secrets on this repo:
+Required secrets on the `release` GitHub Environment:
 
 - `GITHUB_TOKEN` — provided automatically. Used by semantic-release for the bump-back commit, tag, and Release.
-- `TAP_GITHUB_TOKEN` — fine-grained PAT for `glitch418x` with `contents: write` and `pull-requests: write` on `uinaf/homebrew-tap`. The default `GITHUB_TOKEN` only has scope on this repo.
+- `TAP_GITHUB_TOKEN` — `release` Environment secret with `contents: write` on `uinaf/homebrew-tap`.
 
 `chore:` / `docs:` / `refactor:` commits do not bump the version on their own — land them alongside a `feat:` or `fix:` if you want them in a release. `feat!:` / `BREAKING CHANGE:` bumps the major.
 
