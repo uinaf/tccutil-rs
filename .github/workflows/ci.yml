@@ -155,7 +155,7 @@ jobs:
         # semantic-release already created the Release with changelog notes;
         # this step appends the binaries and checksums to the same Release.
         if: steps.release.outputs.new_release_published == 'true'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ steps.release.outputs.new_release_git_tag }}
           generate_release_notes: false
