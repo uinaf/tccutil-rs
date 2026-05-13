@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      cargo-patch-minor:
+        update-types: ["patch", "minor"]
+      cargo-major:
+        update-types: ["major"]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions-patch-minor:
+        update-types: ["patch", "minor"]
+      actions-major:
+        update-types: ["major"]
+    commit-message:
+      prefix: "ci"
