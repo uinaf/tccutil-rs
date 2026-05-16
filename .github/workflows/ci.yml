@@ -32,6 +32,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         run: rustup show
@@ -73,7 +74,9 @@ jobs:
       name: release
       deployment: false
     permissions:
+      attestations: write
       contents: write
+      id-token: write
       issues: write
       pull-requests: write
     concurrency:
@@ -92,7 +95,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Install Rust toolchain (from rust-toolchain.toml + darwin cross-compile targets)
         # `rustup show` installs the channel pinned in rust-toolchain.toml
@@ -109,18 +112,19 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 20
+          package-manager-cache: false
 
       - name: Run semantic-release
         id: release
-        uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6
+        uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6.0.0
         with:
           extra_plugins: |
-            @semantic-release/commit-analyzer
-            @semantic-release/release-notes-generator
-            @semantic-release/exec
-            @semantic-release/git
-            @semantic-release/github
-            conventional-changelog-conventionalcommits
+            @semantic-release/commit-analyzer@13.0.1
+            @semantic-release/release-notes-generator@14.1.1
+            @semantic-release/exec@7.1.0
+            @semantic-release/git@10.0.1
+            @semantic-release/github@12.0.8
+            conventional-changelog-conventionalcommits@9.3.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_AUTHOR_NAME: github-actions[bot]
@@ -136,33 +140,43 @@ jobs:
 
       - name: Package release artifacts
         if: steps.release.outputs.new_release_published == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.new_release_version }}
         run: |
-          VERSION="${{ steps.release.outputs.new_release_version }}"
           mkdir -p dist/arm64 dist/amd64
           cp target/aarch64-apple-darwin/release/tccutil-rs dist/arm64/tccutil-rs
           cp target/x86_64-apple-darwin/release/tccutil-rs dist/amd64/tccutil-rs
           chmod +x dist/arm64/tccutil-rs dist/amd64/tccutil-rs
 
-          tar -C dist/arm64 -czf "tccutil-rs-${VERSION}-darwin-arm64.tar.gz" tccutil-rs
-          tar -C dist/amd64 -czf "tccutil-rs-${VERSION}-darwin-amd64.tar.gz" tccutil-rs
+          tar -C dist/arm64 -czf "tccutil-rs-${RELEASE_VERSION}-darwin-arm64.tar.gz" tccutil-rs
+          tar -C dist/amd64 -czf "tccutil-rs-${RELEASE_VERSION}-darwin-amd64.tar.gz" tccutil-rs
 
           shasum -a 256 \
-            "tccutil-rs-${VERSION}-darwin-arm64.tar.gz" \
-            "tccutil-rs-${VERSION}-darwin-amd64.tar.gz" \
+            "tccutil-rs-${RELEASE_VERSION}-darwin-arm64.tar.gz" \
+            "tccutil-rs-${RELEASE_VERSION}-darwin-amd64.tar.gz" \
             > checksums.txt
 
       - name: Attach assets to GitHub Release
         # semantic-release already created the Release with changelog notes;
         # this step appends the binaries and checksums to the same Release.
         if: steps.release.outputs.new_release_published == 'true'
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.new_release_git_tag }}
+        run: |
+          gh release upload "${RELEASE_TAG}" \
+            tccutil-rs-*-darwin-arm64.tar.gz \
+            tccutil-rs-*-darwin-amd64.tar.gz \
+            checksums.txt \
+            --clobber
+
+      - name: Attest build provenance
+        if: steps.release.outputs.new_release_published == 'true'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
-          tag_name: ${{ steps.release.outputs.new_release_git_tag }}
-          generate_release_notes: false
-          files: |
+          subject-path: |
             tccutil-rs-*-darwin-arm64.tar.gz
             tccutil-rs-*-darwin-amd64.tar.gz
-            checksums.txt
 
   update-homebrew-tap:
     if: needs.release.outputs.new_release_published == 'true'
@@ -177,7 +191,7 @@ jobs:
       contents: read
     steps:
       - name: Release to Homebrew tap
-        uses: Justintime50/homebrew-releaser@a62d7a359683bfc047cdb2431f53ee58241464d1 # v3
+        uses: Justintime50/homebrew-releaser@a62d7a359683bfc047cdb2431f53ee58241464d1 # v3.3.0
         with:
           homebrew_owner: uinaf
           homebrew_tap: homebrew-tap
