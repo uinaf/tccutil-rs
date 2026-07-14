@@ -532,39 +532,45 @@ impl TccDb {
     /// Validate the DB schema before writing.
     /// Unknown digests fail closed unless `allow_unknown` is true (then a warning is returned).
     fn validate_schema(conn: &Connection, allow_unknown: bool) -> Result<Option<String>, TccError> {
-        let digest: Option<String> = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE name='access' AND type='table'",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(sql) = digest {
-            let mut hasher = sha1_smol::Sha1::new();
-            hasher.update(sql.as_bytes());
-            let hex = hasher.digest().to_string();
-            let short = &hex[..10];
-
-            if KNOWN_DIGESTS.contains(&short) {
-                Ok(None)
-            } else if allow_unknown {
-                Ok(Some(format!(
-                    "Unknown TCC database schema (digest: {}). Proceeding because --force was set — results may vary.",
-                    short
-                )))
-            } else {
-                Err(TccError::SchemaInvalid(format!(
-                    "Unknown TCC database schema (digest: {}). \
-                     Refusing to write. Re-run with --force if you intentionally accept this risk, \
-                     or update KNOWN_DIGESTS after verifying the new schema.",
-                    short
-                )))
+        let sql: String = match conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE name='access' AND type='table'",
+            [],
+            |row| row.get(0),
+        ) {
+            Ok(sql) => sql,
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                return Err(TccError::SchemaInvalid(
+                    "Could not read TCC database schema. The access table may not exist."
+                        .to_string(),
+                ));
             }
+            Err(e) => {
+                return Err(TccError::QueryFailed(format!(
+                    "Failed to read TCC database schema: {}",
+                    e
+                )));
+            }
+        };
+
+        let mut hasher = sha1_smol::Sha1::new();
+        hasher.update(sql.as_bytes());
+        let hex = hasher.digest().to_string();
+        let short = &hex[..10];
+
+        if KNOWN_DIGESTS.contains(&short) {
+            Ok(None)
+        } else if allow_unknown {
+            Ok(Some(format!(
+                "Unknown TCC database schema (digest: {}). Proceeding because --force was set — results may vary.",
+                short
+            )))
         } else {
-            Err(TccError::SchemaInvalid(
-                "Could not read TCC database schema. The access table may not exist.".to_string(),
-            ))
+            Err(TccError::SchemaInvalid(format!(
+                "Unknown TCC database schema (digest: {}). \
+                 Refusing to write. Re-run with --force if you intentionally accept this risk, \
+                 or update KNOWN_DIGESTS after verifying the new schema.",
+                short
+            )))
         }
     }
 
@@ -855,6 +861,9 @@ impl TccDb {
                 source: e.to_string(),
             })?;
             match Self::validate_schema(&conn, self.force) {
+                Err(TccError::QueryFailed(msg)) => {
+                    return Err(TccError::QueryFailed(format!("{} DB: {}", label, msg)));
+                }
                 Err(e) => {
                     return Err(TccError::SchemaInvalid(format!("{} DB: {}", label, e)));
                 }
@@ -1895,5 +1904,23 @@ mod tests {
         );
         assert!(err.to_string().contains("--force"));
         assert_eq!(count_rows(&db.user_db_path), 0);
+    }
+
+    #[test]
+    fn grant_rejects_db_missing_access_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        Connection::open(&user)
+            .expect("open")
+            .execute_batch("CREATE TABLE unrelated (id INTEGER);")
+            .expect("seed");
+        let db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        let err = db.grant("Camera", "com.example.app").unwrap_err();
+        assert!(
+            matches!(err, TccError::SchemaInvalid(_)),
+            "expected SchemaInvalid, got: {}",
+            err
+        );
+        assert!(err.to_string().contains("access table"));
     }
 }

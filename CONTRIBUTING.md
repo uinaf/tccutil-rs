@@ -33,7 +33,7 @@ scripts/verify.sh
 
 It runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` — what the optional pre-push hook runs.
 
-CI runs the full gate (coverage + release build as well):
+CI runs the full gate (`cargo llvm-cov` for coverage at 75% line threshold — that also runs the test suite — plus a release build):
 
 ```sh
 scripts/verify.sh --full

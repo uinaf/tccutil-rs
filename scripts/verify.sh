@@ -5,7 +5,7 @@
 #
 # Usage:
 #   scripts/verify.sh          # fmt + clippy + test (default / pre-push)
-#   scripts/verify.sh --full   # also coverage (75%) + release build
+#   scripts/verify.sh --full   # coverage (75%, runs the test suite) + release build
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -32,10 +32,8 @@ cargo fmt --check
 echo "→ cargo clippy -- -D warnings"
 cargo clippy --quiet -- -D warnings
 
-echo "→ cargo test"
-cargo test --quiet
-
 if [[ "$full" -eq 1 ]]; then
+  # llvm-cov executes the test suite; skip a redundant plain `cargo test`.
   echo "→ cargo llvm-cov --fail-under-lines 75"
   rustup component add llvm-tools-preview
   if ! command -v cargo-llvm-cov >/dev/null 2>&1; then
@@ -45,6 +43,9 @@ if [[ "$full" -eq 1 ]]; then
 
   echo "→ cargo build --release"
   cargo build --release --quiet
+else
+  echo "→ cargo test"
+  cargo test --quiet
 fi
 
 echo "✓ verify passed"
