@@ -144,7 +144,7 @@ System DB: /Library/Application Support/com.apple.TCC/TCC.db
 ```
 $ sudo tccutil-rs grant Accessibility /usr/local/bin/my-tool
 
-Granted Accessibility to /usr/local/bin/my-tool (system database)
+Granted Accessibility access for '/usr/local/bin/my-tool'
 ```
 
 System-level services require `sudo`. Use `--user` to write to the user database instead.
@@ -154,7 +154,7 @@ System-level services require `sudo`. Use `--user` to write to the user database
 ```
 $ sudo tccutil-rs revoke Accessibility /usr/local/bin/my-tool
 
-Revoked Accessibility from /usr/local/bin/my-tool (system database)
+Revoked Accessibility access for '/usr/local/bin/my-tool'
 ```
 
 ### `tccutil-rs enable` / `disable` — Toggle an existing entry
@@ -162,11 +162,11 @@ Revoked Accessibility from /usr/local/bin/my-tool (system database)
 ```
 $ sudo tccutil-rs enable Accessibility /usr/local/bin/my-tool
 
-Enabled Accessibility for /usr/local/bin/my-tool (system database)
+Enabled Accessibility access for '/usr/local/bin/my-tool'
 
 $ sudo tccutil-rs disable Accessibility /usr/local/bin/my-tool
 
-Disabled Accessibility for /usr/local/bin/my-tool (system database)
+Disabled Accessibility access for '/usr/local/bin/my-tool'
 ```
 
 ### `tccutil-rs reset` — Reset entries for a service
@@ -174,18 +174,19 @@ Disabled Accessibility for /usr/local/bin/my-tool (system database)
 ```
 $ sudo tccutil-rs reset Accessibility
 
-Reset all entries for Accessibility (system database)
+Reset all Accessibility entries (N deleted)
 
 $ sudo tccutil-rs reset Accessibility /usr/local/bin/my-tool
 
-Reset Accessibility for /usr/local/bin/my-tool (system database)
+Reset Accessibility entry for '/usr/local/bin/my-tool'
 ```
 
 ## Global flags
 
 | Flag | Description |
 |------|-------------|
-| `--user`, `-u` | Operate on the per-user database instead of the system database |
+| `--user`, `-u` | Force the per-user database for `list` and write commands. Default `list` merges both DBs; default per-client writes (`grant`/`revoke`/`enable`/`disable`/`reset CLIENT`) route by service (system services → system DB, others → user DB). Default `reset SERVICE` (no client) clears matching rows in both DBs in one SQLite transaction (a statement failure rolls back both; crash-atomicity under WAL is not guaranteed). It may require `sudo` when the live system DB has matches. If the system DB exists but cannot be inspected (common without Full Disk Access), default reset fails closed — use `--user` to reset only the per-user database. `info` always reports both DBs; `services` does not use a database. |
+| `--force` | Allow write commands against an unrecognized TCC `access` table schema digest (fails closed by default) |
 | `--json`, `-j` | Emit a machine-readable JSON envelope instead of human-formatted output |
 | `--help`, `-h` | Print help |
 | `--version`, `-V` | Print version |
@@ -197,9 +198,14 @@ Reset Accessibility for /usr/local/bin/my-tool (system database)
 Every command accepts `--json`. On success and on failure the response is a single envelope on stdout (stderr stays empty) with the same shape, so scripts and agents can parse one structure:
 
 ```json
-{ "ok": true,  "command": "list",  "data": { "count": 3, "entries": [ ... ] }, "error": null }
+{ "ok": true,  "command": "list",  "data": { "count": 3, "entries": [ ... ], "warnings": [] }, "error": null }
 { "ok": false, "command": "grant", "data": null, "error": { "kind": "UnknownService", "message": "..." } }
+{ "ok": true,  "command": "grant", "data": { "message": "...", "warnings": [{ "kind": "unknown_schema", "message": "..." }] }, "error": null }
 ```
+
+`list` includes a `warnings` array of objects `{ "kind", "source", "message" }`. It is empty when both targeted databases were read successfully. When one DB fails (for example Full Disk Access blocked the system DB) but the other succeeds, `ok` stays `true` and `warnings` describes the incomplete result (`kind` is `db_unreadable` or `malformed_row`).
+
+Write commands include `data.warnings` the same way. With `--force` against an unrecognized schema, success responses carry an `unknown_schema` warning so JSON consumers can audit the bypass.
 
 Error `kind` is one of `DbOpen`, `NotFound`, `NeedsRoot`, `UnknownService`, `AmbiguousService`, `QueryFailed`, `SchemaInvalid`, `HomeDirNotFound`, `WriteFailed`, or `ParseError` (clap parse failures).
 

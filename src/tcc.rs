@@ -89,14 +89,15 @@ impl fmt::Display for TccError {
             TccError::NotFound { service, client } => {
                 write!(
                     f,
-                    "No entry found for service '{}' and client '{}'",
+                    "No entry found for service '{}' and client '{}'. \
+                     Use `tccutil-rs grant` to insert a new entry.",
                     service, client
                 )
             }
             TccError::NeedsRoot { message } => write!(f, "{}", message),
             TccError::UnknownService(s) => write!(
                 f,
-                "Unknown service '{}'. Run `tcc services` to see available services.",
+                "Unknown service '{}'. Run `tccutil-rs services` to see available services.",
                 s
             ),
             TccError::AmbiguousService { input, matches } => write!(
@@ -153,6 +154,84 @@ pub struct TccEntry {
     pub is_system: bool,
 }
 
+/// Machine-readable warning from a successful-but-incomplete `list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListWarning {
+    pub kind: ListWarningKind,
+    /// `"user"` or `"system"`.
+    pub source: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListWarningKind {
+    DbUnreadable,
+    MalformedRow,
+}
+
+impl ListWarningKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DbUnreadable => "db_unreadable",
+            Self::MalformedRow => "malformed_row",
+        }
+    }
+}
+
+/// Result of a successful `list` that may still be incomplete.
+#[derive(Debug)]
+pub struct ListResult {
+    pub entries: Vec<TccEntry>,
+    pub warnings: Vec<ListWarning>,
+}
+
+/// Machine-readable warning from a successful write (`--force` schema, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteWarning {
+    pub kind: WriteWarningKind,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteWarningKind {
+    UnknownSchema,
+}
+
+impl WriteWarningKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnknownSchema => "unknown_schema",
+        }
+    }
+}
+
+/// Result of a successful mutating command.
+#[derive(Debug)]
+pub struct WriteResult {
+    pub message: String,
+    pub warnings: Vec<WriteWarning>,
+}
+
+impl WriteResult {
+    pub fn ok(message: String) -> Self {
+        Self {
+            message,
+            warnings: Vec::new(),
+        }
+    }
+
+    fn with_schema_warning(message: String, warning: Option<String>) -> Self {
+        let mut warnings = Vec::new();
+        if let Some(message) = warning {
+            warnings.push(WriteWarning {
+                kind: WriteWarningKind::UnknownSchema,
+                message,
+            });
+        }
+        Self { message, warnings }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum DbTarget {
     /// Use both DBs for reads, system for writes (default)
@@ -165,7 +244,8 @@ pub struct TccDb {
     user_db_path: PathBuf,
     system_db_path: PathBuf,
     target: DbTarget,
-    suppress_warnings: bool,
+    /// When true, allow writes against an unrecognized access-table schema digest.
+    force: bool,
 }
 
 impl TccDb {
@@ -173,9 +253,9 @@ impl TccDb {
         let home = dirs::home_dir().ok_or(TccError::HomeDirNotFound)?;
         Ok(Self {
             user_db_path: home.join("Library/Application Support/com.apple.TCC/TCC.db"),
-            system_db_path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
+            system_db_path: PathBuf::from(Self::LIVE_SYSTEM_DB),
             target,
-            suppress_warnings: false,
+            force: false,
         })
     }
 
@@ -185,12 +265,12 @@ impl TccDb {
             user_db_path: user,
             system_db_path: system,
             target,
-            suppress_warnings: false,
+            force: false,
         }
     }
 
-    pub fn set_suppress_warnings(&mut self, suppress_warnings: bool) {
-        self.suppress_warnings = suppress_warnings;
+    pub fn set_force(&mut self, force: bool) {
+        self.force = force;
     }
 
     pub(crate) fn format_timestamp(ts: i64) -> String {
@@ -219,11 +299,11 @@ impl TccDb {
 
     fn read_db(
         path: &Path,
+        source: &str,
         is_system: bool,
-        emit_warnings: bool,
-    ) -> Result<Vec<TccEntry>, TccError> {
+    ) -> Result<(Vec<TccEntry>, Vec<ListWarning>), TccError> {
         if !path.exists() {
-            return Ok(vec![]);
+            return Ok((vec![], vec![]));
         }
 
         let conn =
@@ -270,62 +350,65 @@ impl TccDb {
             })?;
 
         let mut entries = Vec::new();
+        let mut warnings = Vec::new();
         for result in rows {
             match result {
                 Ok(entry) => entries.push(entry),
                 Err(e) => {
-                    if emit_warnings {
-                        eprintln!(
-                            "Warning: skipping malformed row in {}: {}",
-                            path.display(),
-                            e
-                        );
-                    }
+                    warnings.push(ListWarning {
+                        kind: ListWarningKind::MalformedRow,
+                        source: source.to_string(),
+                        message: format!("skipping malformed row in {}: {}", path.display(), e),
+                    });
                 }
             }
         }
 
-        Ok(entries)
+        Ok((entries, warnings))
     }
 
     pub fn list(
         &self,
         client_filter: Option<&str>,
         service_filter: Option<&str>,
-    ) -> Result<Vec<TccEntry>, TccError> {
+    ) -> Result<ListResult, TccError> {
         let mut entries = Vec::new();
         let mut attempted = 0usize;
-        let mut errors: Vec<TccError> = Vec::new();
+        let mut errors: Vec<(String, TccError)> = Vec::new();
+        let mut warnings: Vec<ListWarning> = Vec::new();
 
         if self.target == DbTarget::Default || self.target == DbTarget::User {
             attempted += 1;
-            match Self::read_db(&self.user_db_path, false, !self.suppress_warnings) {
-                Ok(mut e) => entries.append(&mut e),
-                Err(e) => errors.push(e),
+            match Self::read_db(&self.user_db_path, "user", false) {
+                Ok((mut e, mut row_warnings)) => {
+                    entries.append(&mut e);
+                    warnings.append(&mut row_warnings);
+                }
+                Err(e) => errors.push(("user".to_string(), e)),
             }
         }
 
         if self.target == DbTarget::Default {
             attempted += 1;
-            match Self::read_db(&self.system_db_path, true, !self.suppress_warnings) {
-                Ok(mut e) => entries.append(&mut e),
-                Err(e) => errors.push(e),
+            match Self::read_db(&self.system_db_path, "system", true) {
+                Ok((mut e, mut row_warnings)) => {
+                    entries.append(&mut e);
+                    warnings.append(&mut row_warnings);
+                }
+                Err(e) => errors.push(("system".to_string(), e)),
             }
         }
 
-        // Every DB we tried failed to open. Surface that as a hard error so
-        // JSON consumers don't silently treat "blocked by FDA" as "no entries".
-        // The caller is responsible for displaying it — don't also stderr-warn.
         if attempted > 0 && errors.len() == attempted {
-            return Err(errors.into_iter().next().unwrap());
+            return Err(errors.into_iter().next().unwrap().1);
         }
 
-        // At least one DB succeeded. Surface the partial failures as warnings
-        // so the user knows the result is incomplete, then return what we got.
-        if !self.suppress_warnings {
-            for e in &errors {
-                eprintln!("Warning: {}", e);
-            }
+        for (source, e) in errors {
+            warnings.push(ListWarning {
+                kind: ListWarningKind::DbUnreadable,
+                source,
+                message: e.to_string(),
+            });
         }
 
         if let Some(cf) = client_filter {
@@ -346,7 +429,7 @@ impl TccDb {
                 .then(a.client.cmp(&b.client))
         });
 
-        Ok(entries)
+        Ok(ListResult { entries, warnings })
     }
 
     pub fn resolve_service_name(&self, input: &str) -> Result<String, TccError> {
@@ -385,6 +468,8 @@ impl TccDb {
         Err(TccError::UnknownService(input.to_string()))
     }
 
+    /// Services whose live grants live in the system TCC.db (not the per-user DB).
+    /// Folder SystemPolicy* services (Desktop/Documents/…) stay in the user DB.
     fn is_system_service(service: &str) -> bool {
         matches!(
             service,
@@ -394,6 +479,8 @@ impl TccDb {
                 | "kTCCServicePostEvent"
                 | "kTCCServiceEndpointSecurityClient"
                 | "kTCCServiceDeveloperTool"
+                | "kTCCServiceSystemPolicyAllFiles"
+                | "kTCCServiceSystemPolicySysAdminFiles"
         )
     }
 
@@ -411,6 +498,13 @@ impl TccDb {
         }
     }
 
+    /// Live system TCC.db path — writes here always require root.
+    pub const LIVE_SYSTEM_DB: &'static str = "/Library/Application Support/com.apple.TCC/TCC.db";
+
+    fn path_requires_root(path: &Path) -> bool {
+        path == Path::new(Self::LIVE_SYSTEM_DB) && !nix_is_root()
+    }
+
     /// Check if root is needed and we don't have it
     fn check_root_for_write(
         &self,
@@ -420,11 +514,11 @@ impl TccDb {
         client: &str,
     ) -> Result<(), TccError> {
         let db_path = self.write_db_path(service_key);
-        if db_path == self.system_db_path && !nix_is_root() {
+        if Self::path_requires_root(db_path) {
             return Err(TccError::NeedsRoot {
                 message: format!(
                     "Service '{}' requires the system TCC database.\n\
-                     Run with sudo: sudo tcc {} {} {}",
+                     Run with sudo: sudo tccutil-rs {} {} {}",
                     Self::service_display_name(service_key),
                     action,
                     service_input,
@@ -435,8 +529,9 @@ impl TccDb {
         Ok(())
     }
 
-    /// Validate the DB schema before writing. Returns Ok with an optional warning.
-    fn validate_schema(conn: &Connection) -> Result<Option<String>, TccError> {
+    /// Validate the DB schema before writing.
+    /// Unknown digests fail closed unless `allow_unknown` is true (then a warning is returned).
+    fn validate_schema(conn: &Connection, allow_unknown: bool) -> Result<Option<String>, TccError> {
         let digest: Option<String> = conn
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE name='access' AND type='table'",
@@ -453,9 +548,16 @@ impl TccDb {
 
             if KNOWN_DIGESTS.contains(&short) {
                 Ok(None)
-            } else {
+            } else if allow_unknown {
                 Ok(Some(format!(
-                    "Warning: Unknown TCC database schema (digest: {}). Proceeding anyway — results may vary.",
+                    "Unknown TCC database schema (digest: {}). Proceeding because --force was set — results may vary.",
+                    short
+                )))
+            } else {
+                Err(TccError::SchemaInvalid(format!(
+                    "Unknown TCC database schema (digest: {}). \
+                     Refusing to write. Re-run with --force if you intentionally accept this risk, \
+                     or update KNOWN_DIGESTS after verifying the new schema.",
                     short
                 )))
             }
@@ -473,20 +575,15 @@ impl TccDb {
             path: db_path.to_path_buf(),
             source: e.to_string(),
         })?;
-        let warning = Self::validate_schema(&conn)?;
+        let warning = Self::validate_schema(&conn, self.force)?;
         Ok((conn, warning))
     }
 
-    pub fn grant(&self, service: &str, client: &str) -> Result<String, TccError> {
+    pub fn grant(&self, service: &str, client: &str) -> Result<WriteResult, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "grant", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning
-            && !self.suppress_warnings
-        {
-            eprintln!("{}", w);
-        }
 
         let client_type: i32 = if client.starts_with('/') { 0 } else { 1 };
         let now = chrono::Utc::now().timestamp() - 978_307_200;
@@ -505,23 +602,21 @@ impl TccDb {
             ))
         })?;
 
-        Ok(format!(
-            "Granted {} access for '{}'",
-            Self::service_display_name(&service_key),
-            client
+        Ok(WriteResult::with_schema_warning(
+            format!(
+                "Granted {} access for '{}'",
+                Self::service_display_name(&service_key),
+                client
+            ),
+            warning,
         ))
     }
 
-    pub fn revoke(&self, service: &str, client: &str) -> Result<String, TccError> {
+    pub fn revoke(&self, service: &str, client: &str) -> Result<WriteResult, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "revoke", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning
-            && !self.suppress_warnings
-        {
-            eprintln!("{}", w);
-        }
 
         let deleted = conn
             .execute(
@@ -541,24 +636,22 @@ impl TccDb {
                 client: client.to_string(),
             })
         } else {
-            Ok(format!(
-                "Revoked {} access for '{}'",
-                Self::service_display_name(&service_key),
-                client
+            Ok(WriteResult::with_schema_warning(
+                format!(
+                    "Revoked {} access for '{}'",
+                    Self::service_display_name(&service_key),
+                    client
+                ),
+                warning,
             ))
         }
     }
 
-    pub fn enable(&self, service: &str, client: &str) -> Result<String, TccError> {
+    pub fn enable(&self, service: &str, client: &str) -> Result<WriteResult, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "enable", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning
-            && !self.suppress_warnings
-        {
-            eprintln!("{}", w);
-        }
 
         let now = chrono::Utc::now().timestamp() - 978_307_200;
         let updated = conn
@@ -575,31 +668,26 @@ impl TccDb {
 
         if updated == 0 {
             Err(TccError::NotFound {
-                service: format!(
-                    "{}. Use `tcc grant` to insert a new entry",
-                    Self::service_display_name(&service_key)
-                ),
+                service: Self::service_display_name(&service_key),
                 client: client.to_string(),
             })
         } else {
-            Ok(format!(
-                "Enabled {} access for '{}'",
-                Self::service_display_name(&service_key),
-                client
+            Ok(WriteResult::with_schema_warning(
+                format!(
+                    "Enabled {} access for '{}'",
+                    Self::service_display_name(&service_key),
+                    client
+                ),
+                warning,
             ))
         }
     }
 
-    pub fn disable(&self, service: &str, client: &str) -> Result<String, TccError> {
+    pub fn disable(&self, service: &str, client: &str) -> Result<WriteResult, TccError> {
         let service_key = self.resolve_service_name(service)?;
         self.check_root_for_write(&service_key, "disable", service, client)?;
 
         let (conn, warning) = self.open_writable(&service_key)?;
-        if let Some(w) = &warning
-            && !self.suppress_warnings
-        {
-            eprintln!("{}", w);
-        }
 
         let now = chrono::Utc::now().timestamp() - 978_307_200;
         let updated = conn
@@ -620,27 +708,24 @@ impl TccDb {
                 client: client.to_string(),
             })
         } else {
-            Ok(format!(
-                "Disabled {} access for '{}'",
-                Self::service_display_name(&service_key),
-                client
+            Ok(WriteResult::with_schema_warning(
+                format!(
+                    "Disabled {} access for '{}'",
+                    Self::service_display_name(&service_key),
+                    client
+                ),
+                warning,
             ))
         }
     }
 
-    pub fn reset(&self, service: &str, client: Option<&str>) -> Result<String, TccError> {
+    pub fn reset(&self, service: &str, client: Option<&str>) -> Result<WriteResult, TccError> {
         let service_key = self.resolve_service_name(service)?;
 
         if let Some(c) = client {
-            // Delete specific client entry
             self.check_root_for_write(&service_key, "reset", service, c)?;
 
             let (conn, warning) = self.open_writable(&service_key)?;
-            if let Some(w) = &warning
-                && !self.suppress_warnings
-            {
-                eprintln!("{}", w);
-            }
 
             let deleted = conn
                 .execute(
@@ -655,76 +740,213 @@ impl TccDb {
                     client: c.to_string(),
                 })
             } else {
-                Ok(format!(
-                    "Reset {} entry for '{}'",
-                    Self::service_display_name(&service_key),
-                    c
+                Ok(WriteResult::with_schema_warning(
+                    format!(
+                        "Reset {} entry for '{}'",
+                        Self::service_display_name(&service_key),
+                        c
+                    ),
+                    warning,
                 ))
             }
         } else {
-            // Delete all entries for this service
-            // For default target, try to reset in both DBs
-            let mut total_deleted = 0usize;
-            let mut errors = Vec::new();
+            self.reset_all_for_service(&service_key, service)
+        }
+    }
 
-            let paths: Vec<(&Path, &str)> = match self.target {
-                DbTarget::User => vec![(&self.user_db_path, "user")],
-                DbTarget::Default => vec![
-                    (&self.user_db_path, "user"),
-                    (&self.system_db_path, "system"),
-                ],
-            };
+    /// Reset every matching row for `service_key` across targeted DBs.
+    /// When both DBs are mutated, uses ATTACH + one transaction so a
+    /// mid-flight *statement* failure rolls back both deletes. SQLite does
+    /// not guarantee crash-atomicity across ATTACHed databases in WAL mode
+    /// (common for TCC.db); we do not claim power-loss atomicity.
+    fn reset_all_for_service(
+        &self,
+        service_key: &str,
+        service_input: &str,
+    ) -> Result<WriteResult, TccError> {
+        let paths: Vec<(&Path, &str)> = match self.target {
+            DbTarget::User => vec![(&self.user_db_path, "user")],
+            DbTarget::Default => vec![
+                (&self.user_db_path, "user"),
+                (&self.system_db_path, "system"),
+            ],
+        };
 
-            for (db_path, label) in paths {
-                if !db_path.exists() {
-                    continue;
-                }
-                // Check root for system DB writes
-                if db_path == self.system_db_path && !nix_is_root() {
-                    return Err(TccError::NeedsRoot {
-                        message: format!(
-                            "Resetting all '{}' entries requires the system TCC database.\n\
-                             Run with sudo: sudo tcc reset {}",
-                            Self::service_display_name(&service_key),
-                            service
-                        ),
+        let mut existing_paths: Vec<(&Path, &str)> = Vec::new();
+        for &(db_path, label) in &paths {
+            match db_path.try_exists() {
+                Ok(true) => existing_paths.push((db_path, label)),
+                Ok(false) => {}
+                Err(e) => {
+                    return Err(TccError::DbOpen {
+                        path: db_path.to_path_buf(),
+                        source: format!("cannot access path: {}", e),
                     });
                 }
-                match Connection::open(db_path) {
-                    Ok(conn) => {
-                        if let Err(e) = Self::validate_schema(&conn) {
-                            errors.push(format!("{} DB: {}", label, e));
-                            continue;
-                        }
-                        match conn.execute(
-                            "DELETE FROM access WHERE service = ?1",
-                            rusqlite::params![service_key],
-                        ) {
-                            Ok(n) => total_deleted += n,
-                            Err(e) => errors.push(format!("{} DB: {}", label, e)),
-                        }
-                    }
-                    Err(e) => errors.push(format!("{} DB: {}", label, e)),
-                }
-            }
-
-            if total_deleted == 0 && !errors.is_empty() {
-                Err(TccError::WriteFailed(format!(
-                    "Failed to reset: {}",
-                    errors.join("; ")
-                )))
-            } else {
-                let mut msg = format!(
-                    "Reset all {} entries ({} deleted)",
-                    Self::service_display_name(&service_key),
-                    total_deleted
-                );
-                for e in errors {
-                    msg.push_str(&format!("\nWarning: {}", e));
-                }
-                Ok(msg)
             }
         }
+
+        let system_present = existing_paths
+            .iter()
+            .any(|(p, _)| *p == self.system_db_path.as_path());
+        if system_present && Self::path_requires_root(&self.system_db_path) {
+            let conn =
+                Connection::open_with_flags(&self.system_db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .map_err(|e| {
+                        let mut msg = e.to_string();
+                        msg.push_str(
+                    "\nIf you only need to reset the per-user database, re-run with --user.",
+                );
+                        TccError::DbOpen {
+                            path: self.system_db_path.clone(),
+                            source: msg,
+                        }
+                    })?;
+            let system_has_rows: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM access WHERE service = ?1",
+                    rusqlite::params![service_key],
+                    |row| row.get(0),
+                )
+                .map_err(|e| {
+                    TccError::QueryFailed(format!(
+                        "Failed to inspect system TCC database before reset: {}. \
+                         If you only need the per-user database, re-run with --user.",
+                        e
+                    ))
+                })?;
+
+            if system_has_rows > 0 {
+                return Err(TccError::NeedsRoot {
+                    message: format!(
+                        "Resetting all '{}' entries requires the system TCC database.\n\
+                         Run with sudo: sudo tccutil-rs reset {}\n\
+                         Or reset only the user database: tccutil-rs --user reset {}",
+                        Self::service_display_name(service_key),
+                        service_input,
+                        service_input
+                    ),
+                });
+            }
+        }
+
+        // Paths we will actually mutate (skip live system DB when non-root and empty).
+        let mut mutate: Vec<(&Path, &str)> = Vec::new();
+        for (db_path, label) in existing_paths {
+            if Self::path_requires_root(db_path) {
+                // Confirmed zero matching system rows above; skip quietly.
+                continue;
+            }
+            mutate.push((db_path, label));
+        }
+
+        if mutate.is_empty() {
+            return Ok(WriteResult::ok(format!(
+                "Reset all {} entries (0 deleted)",
+                Self::service_display_name(service_key)
+            )));
+        }
+
+        // Validate schemas up front (and collect --force warnings) before any DELETE.
+        let mut schema_warnings: Vec<WriteWarning> = Vec::new();
+        for (db_path, label) in &mutate {
+            let conn = Connection::open(db_path).map_err(|e| TccError::DbOpen {
+                path: db_path.to_path_buf(),
+                source: e.to_string(),
+            })?;
+            match Self::validate_schema(&conn, self.force) {
+                Err(e) => {
+                    return Err(TccError::SchemaInvalid(format!("{} DB: {}", label, e)));
+                }
+                Ok(Some(message)) => {
+                    schema_warnings.push(WriteWarning {
+                        kind: WriteWarningKind::UnknownSchema,
+                        message: format!("{} DB: {}", label, message),
+                    });
+                }
+                Ok(None) => {}
+            }
+        }
+
+        let total_deleted = if mutate.len() == 1 {
+            let (db_path, label) = mutate[0];
+            let conn = Connection::open(db_path).map_err(|e| TccError::DbOpen {
+                path: db_path.to_path_buf(),
+                source: e.to_string(),
+            })?;
+            conn.execute(
+                "DELETE FROM access WHERE service = ?1",
+                rusqlite::params![service_key],
+            )
+            .map_err(|e| TccError::WriteFailed(format!("Failed to reset {} DB: {}", label, e)))?
+        } else {
+            // Cross-DB delete in one transaction so a statement failure rolls
+            // back both sides. (WAL crash-atomicity across ATTACH is not
+            // guaranteed by SQLite; we only rely on statement-level rollback.)
+            let (primary_path, primary_label) = mutate[0];
+            let (secondary_path, secondary_label) = mutate[1];
+            let conn = Connection::open(primary_path).map_err(|e| TccError::DbOpen {
+                path: primary_path.to_path_buf(),
+                source: e.to_string(),
+            })?;
+            conn.execute(
+                "ATTACH DATABASE ?1 AS sys_tcc",
+                rusqlite::params![secondary_path.to_string_lossy().as_ref()],
+            )
+            .map_err(|e| {
+                TccError::WriteFailed(format!(
+                    "Failed to attach {} DB for dual-DB reset: {}",
+                    secondary_label, e
+                ))
+            })?;
+
+            let delete_result = (|| -> Result<usize, TccError> {
+                conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| {
+                    TccError::WriteFailed(format!("Failed to begin reset txn: {}", e))
+                })?;
+                let n_primary = conn
+                    .execute(
+                        "DELETE FROM main.access WHERE service = ?1",
+                        rusqlite::params![service_key],
+                    )
+                    .map_err(|e| {
+                        TccError::WriteFailed(format!(
+                            "Failed to reset {} DB: {}",
+                            primary_label, e
+                        ))
+                    })?;
+                let n_secondary = conn
+                    .execute(
+                        "DELETE FROM sys_tcc.access WHERE service = ?1",
+                        rusqlite::params![service_key],
+                    )
+                    .map_err(|e| {
+                        TccError::WriteFailed(format!(
+                            "Failed to reset {} DB: {}",
+                            secondary_label, e
+                        ))
+                    })?;
+                conn.execute_batch("COMMIT").map_err(|e| {
+                    TccError::WriteFailed(format!("Failed to commit reset txn: {}", e))
+                })?;
+                Ok(n_primary + n_secondary)
+            })();
+
+            if delete_result.is_err() {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
+            let _ = conn.execute_batch("DETACH DATABASE sys_tcc");
+            delete_result?
+        };
+
+        Ok(WriteResult {
+            message: format!(
+                "Reset all {} entries ({} deleted)",
+                Self::service_display_name(service_key),
+                total_deleted
+            ),
+            warnings: schema_warnings,
+        })
     }
 
     pub fn info(&self) -> Vec<String> {
@@ -986,31 +1208,44 @@ mod tests {
         assert_eq!(compact_client("/"), "/");
     }
 
-    // ── Client/service filtering (partial match) ──────────────────────
+    // ── Client/service filtering (partial match via list) ─────────────
+
+    fn seed_entry(path: &Path, service: &str, client: &str, auth_value: i32) {
+        let conn = Connection::open(path).expect("open seed db");
+        conn.execute(
+            "INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified)
+             VALUES (?1, ?2, 1, ?3, 0, 1, 0, 0)",
+            rusqlite::params![service, client, auth_value],
+        )
+        .expect("seed entry");
+    }
 
     #[test]
     fn client_filter_partial_match() {
-        let entries = vec![
-            make_entry("kTCCServiceCamera", "com.apple.Terminal", 2),
-            make_entry("kTCCServiceMicrophone", "com.google.Chrome", 0),
-            make_entry("kTCCServiceCamera", "com.apple.Safari", 2),
-        ];
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        seed_entry(&user, "kTCCServiceCamera", "com.apple.Terminal", 2);
+        seed_entry(&user, "kTCCServiceMicrophone", "com.google.Chrome", 0);
+        seed_entry(&user, "kTCCServiceCamera", "com.apple.Safari", 2);
 
-        let filtered = filter_entries(entries, Some("apple"), None);
+        let db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        let filtered = db.list(Some("apple"), None).unwrap().entries;
         assert_eq!(filtered.len(), 2);
         assert!(filtered.iter().all(|e| e.client.contains("apple")));
     }
 
     #[test]
     fn service_filter_partial_match_display_name() {
-        let entries = vec![
-            make_entry("kTCCServiceCamera", "com.app.a", 2),
-            make_entry("kTCCServiceMicrophone", "com.app.b", 0),
-            make_entry("kTCCServiceScreenCapture", "com.app.c", 2),
-        ];
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        seed_entry(&user, "kTCCServiceCamera", "com.app.a", 2);
+        seed_entry(&user, "kTCCServiceMicrophone", "com.app.b", 0);
+        seed_entry(&user, "kTCCServiceScreenCapture", "com.app.c", 2);
 
-        // Matches "Camera" display name
-        let filtered = filter_entries(entries, None, Some("Camer"));
+        let db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        let filtered = db.list(None, Some("Camer")).unwrap().entries;
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].service_raw, "kTCCServiceCamera");
     }
@@ -1027,8 +1262,7 @@ mod tests {
         std::fs::write(&bad_user, b"not a tcc db").expect("write user");
         std::fs::write(&bad_system, b"not a tcc db").expect("write system");
 
-        let mut db = TccDb::with_paths(bad_user, bad_system, DbTarget::Default);
-        db.set_suppress_warnings(true);
+        let db = TccDb::with_paths(bad_user, bad_system, DbTarget::Default);
 
         let result = db.list(None, None);
         assert!(
@@ -1064,8 +1298,7 @@ mod tests {
         build_valid_tcc_db(&good_user);
         std::fs::write(&bad_system, b"not a tcc db").expect("write system");
 
-        let mut db = TccDb::with_paths(good_user, bad_system, DbTarget::Default);
-        db.set_suppress_warnings(true);
+        let db = TccDb::with_paths(good_user, bad_system, DbTarget::Default);
 
         let result = db.list(None, None);
         assert!(
@@ -1073,10 +1306,24 @@ mod tests {
             "partial success should still return Ok, got {:?}",
             result.err()
         );
+        let listed = result.unwrap();
         assert_eq!(
-            result.unwrap().len(),
+            listed.entries.len(),
             0,
             "user DB is empty, expected 0 entries"
+        );
+        assert_eq!(
+            listed.warnings.len(),
+            1,
+            "system DB failure must surface as a structured warning for JSON consumers"
+        );
+        assert_eq!(listed.warnings[0].kind, ListWarningKind::DbUnreadable);
+        assert_eq!(listed.warnings[0].source, "system");
+        assert!(
+            listed.warnings[0].message.contains("Failed to open")
+                || listed.warnings[0].message.contains("Query"),
+            "unexpected warning: {}",
+            listed.warnings[0].message
         );
     }
 
@@ -1095,34 +1342,46 @@ mod tests {
         let db = TccDb::with_paths(good_user, bad_system, DbTarget::Default);
         let result = db.list(None, None);
         assert!(result.is_ok(), "partial success should return Ok");
+        let listed = result.unwrap();
+        assert_eq!(listed.warnings.len(), 1);
+        assert_eq!(listed.warnings[0].kind, ListWarningKind::DbUnreadable);
     }
 
     #[test]
     fn service_filter_partial_match_raw_key() {
-        let entries = vec![
-            make_entry("kTCCServiceCamera", "com.app.a", 2),
-            make_entry("kTCCServiceMicrophone", "com.app.b", 0),
-        ];
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        seed_entry(&user, "kTCCServiceCamera", "com.app.a", 2);
+        seed_entry(&user, "kTCCServiceMicrophone", "com.app.b", 0);
 
-        // Matches raw key
-        let filtered = filter_entries(entries, None, Some("kTCCServiceMicro"));
+        let db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        let filtered = db.list(None, Some("kTCCServiceMicro")).unwrap().entries;
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].service_raw, "kTCCServiceMicrophone");
     }
 
     #[test]
     fn filter_case_insensitive() {
-        let entries = vec![make_entry("kTCCServiceCamera", "com.Apple.Terminal", 2)];
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        seed_entry(&user, "kTCCServiceCamera", "com.Apple.Terminal", 2);
 
-        let filtered = filter_entries(entries, Some("APPLE"), None);
+        let db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        let filtered = db.list(Some("APPLE"), None).unwrap().entries;
         assert_eq!(filtered.len(), 1);
     }
 
     #[test]
     fn filter_no_match_returns_empty() {
-        let entries = vec![make_entry("kTCCServiceCamera", "com.apple.Terminal", 2)];
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        seed_entry(&user, "kTCCServiceCamera", "com.apple.Terminal", 2);
 
-        let filtered = filter_entries(entries, Some("nonexistent"), None);
+        let db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        let filtered = db.list(Some("nonexistent"), None).unwrap().entries;
         assert!(filtered.is_empty());
     }
 
@@ -1161,39 +1420,6 @@ mod tests {
             "Got: {}",
             result
         );
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────
-
-    fn make_entry(service_raw: &str, client: &str, auth_value: i32) -> TccEntry {
-        TccEntry {
-            service_raw: service_raw.to_string(),
-            service_display: TccDb::service_display_name(service_raw),
-            client: client.to_string(),
-            auth_value,
-            last_modified: "2024-01-01 00:00:00".to_string(),
-            is_system: false,
-        }
-    }
-
-    /// Applies the same filtering logic as TccDb::list
-    fn filter_entries(
-        mut entries: Vec<TccEntry>,
-        client_filter: Option<&str>,
-        service_filter: Option<&str>,
-    ) -> Vec<TccEntry> {
-        if let Some(cf) = client_filter {
-            let cf_lower = cf.to_lowercase();
-            entries.retain(|e| e.client.to_lowercase().contains(&cf_lower));
-        }
-        if let Some(sf) = service_filter {
-            let sf_lower = sf.to_lowercase();
-            entries.retain(|e| {
-                e.service_display.to_lowercase().contains(&sf_lower)
-                    || e.service_raw.to_lowercase().contains(&sf_lower)
-            });
-        }
-        entries
     }
 
     // ── Resolve service name ──────────────────────────────────────────
@@ -1284,7 +1510,9 @@ mod tests {
         .expect("failed to create table");
         drop(conn);
 
-        let db = TccDb::with_paths(db_path, dir.path().join("system_TCC.db"), DbTarget::User);
+        let mut db = TccDb::with_paths(db_path, dir.path().join("system_TCC.db"), DbTarget::User);
+        // Fixture DDL is not in KNOWN_DIGESTS; write tests use --force semantics.
+        db.set_force(true);
 
         (dir, db)
     }
@@ -1294,9 +1522,9 @@ mod tests {
         let (_dir, db) = make_temp_tcc_db();
         let result = db.grant("Camera", "com.example.app");
         assert!(result.is_ok(), "grant failed: {:?}", result.err());
-        assert!(result.unwrap().contains("Granted"));
+        assert!(result.unwrap().message.contains("Granted"));
 
-        let entries = db.list(None, None).unwrap();
+        let entries = db.list(None, None).unwrap().entries;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].service_raw, "kTCCServiceCamera");
         assert_eq!(entries[0].client, "com.example.app");
@@ -1343,7 +1571,7 @@ mod tests {
         let result = db.revoke("Camera", "com.example.app");
         assert!(result.is_ok());
 
-        let entries = db.list(None, None).unwrap();
+        let entries = db.list(None, None).unwrap().entries;
         assert!(entries.is_empty());
     }
 
@@ -1361,11 +1589,11 @@ mod tests {
         db.grant("Camera", "com.example.app").unwrap();
         db.disable("Camera", "com.example.app").unwrap();
 
-        let entries = db.list(None, None).unwrap();
+        let entries = db.list(None, None).unwrap().entries;
         assert_eq!(entries[0].auth_value, 0);
 
         db.enable("Camera", "com.example.app").unwrap();
-        let entries = db.list(None, None).unwrap();
+        let entries = db.list(None, None).unwrap().entries;
         assert_eq!(entries[0].auth_value, 2);
     }
 
@@ -1375,7 +1603,7 @@ mod tests {
         db.grant("Camera", "com.example.app").unwrap();
 
         db.disable("Camera", "com.example.app").unwrap();
-        let entries = db.list(None, None).unwrap();
+        let entries = db.list(None, None).unwrap().entries;
         assert_eq!(entries[0].auth_value, 0);
     }
 
@@ -1384,7 +1612,46 @@ mod tests {
         let (_dir, db) = make_temp_tcc_db();
         let result = db.enable("Camera", "com.nonexistent.app");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), TccError::NotFound { .. }));
+        let err = result.unwrap_err();
+        assert!(matches!(err, TccError::NotFound { .. }));
+        if let TccError::NotFound { service, client } = err {
+            assert_eq!(service, "Camera");
+            assert_eq!(client, "com.nonexistent.app");
+        }
+        // Remediation lives in Display, not the structured service field.
+        let rendered = TccError::NotFound {
+            service: "Camera".into(),
+            client: "com.nonexistent.app".into(),
+        }
+        .to_string();
+        assert!(rendered.contains("tccutil-rs grant"));
+        assert!(!rendered.contains("`tcc grant`"));
+    }
+
+    #[test]
+    fn operator_messages_use_tccutil_rs_binary_name() {
+        let unknown = TccError::UnknownService("Nope".into()).to_string();
+        assert!(unknown.contains("tccutil-rs services"));
+        assert!(!unknown.contains("`tcc services`"));
+
+        if nix_is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        let mut db = TccDb::with_paths(
+            user,
+            PathBuf::from(TccDb::LIVE_SYSTEM_DB),
+            DbTarget::Default,
+        );
+        db.set_force(true);
+        let msg = db
+            .grant("Accessibility", "/bin/foo")
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("sudo tccutil-rs grant"));
+        assert!(!msg.contains("sudo tcc "));
     }
 
     #[test]
@@ -1394,7 +1661,7 @@ mod tests {
         db.grant("Camera", "com.example.b").unwrap();
 
         db.reset("Camera", Some("com.example.a")).unwrap();
-        let entries = db.list(None, None).unwrap();
+        let entries = db.list(None, None).unwrap().entries;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].client, "com.example.b");
     }
@@ -1407,9 +1674,9 @@ mod tests {
         db.grant("Microphone", "com.example.a").unwrap();
 
         let result = db.reset("Camera", None).unwrap();
-        assert!(result.contains("2 deleted"));
+        assert!(result.message.contains("2 deleted"));
 
-        let entries = db.list(None, None).unwrap();
+        let entries = db.list(None, None).unwrap().entries;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].service_raw, "kTCCServiceMicrophone");
     }
@@ -1423,5 +1690,218 @@ mod tests {
         );
         assert_eq!(db.user_db_path, PathBuf::from("/tmp/user.db"));
         assert_eq!(db.system_db_path, PathBuf::from("/tmp/system.db"));
+    }
+
+    // ── Write routing (user vs system DB) ─────────────────────────────
+
+    fn make_dual_temp_tcc_db(target: DbTarget) -> (tempfile::TempDir, TccDb) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        let system = dir.path().join("system.db");
+        build_valid_tcc_db(&user);
+        build_valid_tcc_db(&system);
+        let mut db = TccDb::with_paths(user, system, target);
+        db.set_force(true);
+        (dir, db)
+    }
+
+    fn count_rows(path: &Path) -> i64 {
+        let conn = Connection::open(path).expect("open count");
+        conn.query_row("SELECT COUNT(*) FROM access", [], |row| row.get(0))
+            .expect("count")
+    }
+
+    #[test]
+    fn default_grant_camera_writes_user_db() {
+        let (_dir, db) = make_dual_temp_tcc_db(DbTarget::Default);
+        db.grant("Camera", "com.example.app").unwrap();
+        assert_eq!(count_rows(&db.user_db_path), 1);
+        assert_eq!(count_rows(&db.system_db_path), 0);
+    }
+
+    #[test]
+    fn default_grant_desktop_folder_writes_user_db() {
+        // Folder SystemPolicy* services live in the per-user TCC.db.
+        let (_dir, db) = make_dual_temp_tcc_db(DbTarget::Default);
+        db.grant("Desktop Folder", "com.example.app").unwrap();
+        assert_eq!(count_rows(&db.user_db_path), 1);
+        assert_eq!(count_rows(&db.system_db_path), 0);
+    }
+
+    #[test]
+    fn default_grant_accessibility_writes_system_temp_db() {
+        let (_dir, db) = make_dual_temp_tcc_db(DbTarget::Default);
+        db.grant("Accessibility", "com.example.app").unwrap();
+        assert_eq!(count_rows(&db.user_db_path), 0);
+        assert_eq!(count_rows(&db.system_db_path), 1);
+    }
+
+    #[test]
+    fn default_grant_accessibility_requires_root_for_live_system_db() {
+        if nix_is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        let mut db = TccDb::with_paths(
+            user,
+            PathBuf::from(TccDb::LIVE_SYSTEM_DB),
+            DbTarget::Default,
+        );
+        db.set_force(true);
+        let err = db.grant("Accessibility", "com.example.app").unwrap_err();
+        assert!(
+            matches!(err, TccError::NeedsRoot { .. }),
+            "expected NeedsRoot, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn default_grant_full_disk_access_requires_root_for_live_system_db() {
+        if nix_is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        let mut db = TccDb::with_paths(
+            user,
+            PathBuf::from(TccDb::LIVE_SYSTEM_DB),
+            DbTarget::Default,
+        );
+        db.set_force(true);
+        let err = db.grant("Full Disk Access", "com.example.app").unwrap_err();
+        assert!(
+            matches!(err, TccError::NeedsRoot { .. }),
+            "FDA must route to live system DB, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn user_target_grant_accessibility_writes_user_db_without_root() {
+        let (_dir, db) = make_dual_temp_tcc_db(DbTarget::User);
+        db.grant("Accessibility", "com.example.app").unwrap();
+        assert_eq!(count_rows(&db.user_db_path), 1);
+        assert_eq!(count_rows(&db.system_db_path), 0);
+    }
+
+    #[test]
+    fn default_reset_user_only_service_succeeds_without_root() {
+        if nix_is_root() {
+            return;
+        }
+        let (_dir, db) = make_dual_temp_tcc_db(DbTarget::Default);
+        // Seed via User target so we don't need root for Camera.
+        let user_db = {
+            let mut db = TccDb::with_paths(
+                db.user_db_path.clone(),
+                db.system_db_path.clone(),
+                DbTarget::User,
+            );
+            db.set_force(true);
+            db
+        };
+        user_db.grant("Camera", "com.example.a").unwrap();
+        user_db.grant("Camera", "com.example.b").unwrap();
+        assert_eq!(count_rows(&db.user_db_path), 2);
+
+        let result = db.reset("Camera", None).unwrap();
+        assert!(result.message.contains("2 deleted"));
+        assert_eq!(count_rows(&db.user_db_path), 0);
+        assert_eq!(count_rows(&db.system_db_path), 0);
+    }
+
+    #[test]
+    fn default_reset_aborts_before_user_delete_when_live_system_involved() {
+        if nix_is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        seed_entry(&user, "kTCCServiceCamera", "com.example.user", 2);
+        let mut db = TccDb::with_paths(
+            user,
+            PathBuf::from(TccDb::LIVE_SYSTEM_DB),
+            DbTarget::Default,
+        );
+        db.set_force(true);
+
+        let err = db.reset("Camera", None).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TccError::NeedsRoot { .. } | TccError::DbOpen { .. } | TccError::QueryFailed(_)
+            ),
+            "expected fail-closed before user delete, got: {}",
+            err
+        );
+        assert_eq!(count_rows(&db.user_db_path), 1);
+    }
+
+    #[test]
+    fn default_reset_atomic_rolls_back_when_second_delete_aborts() {
+        let (_dir, db) = make_dual_temp_tcc_db(DbTarget::Default);
+        seed_entry(&db.user_db_path, "kTCCServiceCamera", "com.example.user", 2);
+        seed_entry(
+            &db.system_db_path,
+            "kTCCServiceCamera",
+            "com.example.system",
+            2,
+        );
+        // Abort any DELETE on the system DB so the ATTACH transaction must roll back.
+        let conn = Connection::open(&db.system_db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER deny_delete BEFORE DELETE ON access BEGIN
+                SELECT RAISE(ABORT, 'injected delete failure');
+             END;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let err = db.reset("Camera", None).unwrap_err();
+        assert!(
+            matches!(err, TccError::WriteFailed(_)),
+            "expected WriteFailed from aborted txn, got: {}",
+            err
+        );
+        assert_eq!(
+            count_rows(&db.user_db_path),
+            1,
+            "user rows must remain after rolled-back dual reset (statement abort)"
+        );
+        assert_eq!(count_rows(&db.system_db_path), 1);
+    }
+
+    #[test]
+    fn grant_allows_unknown_schema_with_force() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        let mut db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        db.set_force(true);
+        let result = db.grant("Camera", "com.example.app").unwrap();
+        assert_eq!(count_rows(&db.user_db_path), 1);
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(result.warnings[0].kind, WriteWarningKind::UnknownSchema);
+    }
+
+    #[test]
+    fn grant_rejects_unknown_schema_without_force() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user = dir.path().join("user.db");
+        build_valid_tcc_db(&user);
+        let db = TccDb::with_paths(user, dir.path().join("system.db"), DbTarget::User);
+        let err = db.grant("Camera", "com.example.app").unwrap_err();
+        assert!(
+            matches!(err, TccError::SchemaInvalid(_)),
+            "expected SchemaInvalid, got: {}",
+            err
+        );
+        assert!(err.to_string().contains("--force"));
+        assert_eq!(count_rows(&db.user_db_path), 0);
     }
 }
