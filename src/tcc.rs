@@ -1815,31 +1815,23 @@ mod tests {
     }
 
     #[test]
-    fn default_reset_aborts_before_user_delete_when_live_system_involved() {
-        if nix_is_root() {
-            return;
-        }
-        let dir = tempfile::tempdir().expect("tempdir");
-        let user = dir.path().join("user.db");
-        build_valid_tcc_db(&user);
-        seed_entry(&user, "kTCCServiceCamera", "com.example.user", 2);
-        let mut db = TccDb::with_paths(
-            user,
-            PathBuf::from(TccDb::LIVE_SYSTEM_DB),
-            DbTarget::Default,
+    fn default_reset_deletes_both_temp_dbs_without_live_system() {
+        // Temp system paths do not require root; Default reset must clear both.
+        // (Do not probe the live system TCC.db — CI runners may have a readable
+        // empty system DB, which would make a live-path preflight succeed and
+        // only delete the user fixture.)
+        let (_dir, db) = make_dual_temp_tcc_db(DbTarget::Default);
+        seed_entry(&db.user_db_path, "kTCCServiceCamera", "com.example.user", 2);
+        seed_entry(
+            &db.system_db_path,
+            "kTCCServiceCamera",
+            "com.example.system",
+            2,
         );
-        db.set_force(true);
-
-        let err = db.reset("Camera", None).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                TccError::NeedsRoot { .. } | TccError::DbOpen { .. } | TccError::QueryFailed(_)
-            ),
-            "expected fail-closed before user delete, got: {}",
-            err
-        );
-        assert_eq!(count_rows(&db.user_db_path), 1);
+        let result = db.reset("Camera", None).unwrap();
+        assert!(result.message.contains("2 deleted"));
+        assert_eq!(count_rows(&db.user_db_path), 0);
+        assert_eq!(count_rows(&db.system_db_path), 0);
     }
 
     #[test]
