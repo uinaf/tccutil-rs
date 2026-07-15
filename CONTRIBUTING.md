@@ -6,7 +6,7 @@ Thanks for sending changes.
 
 ```sh
 git clone git@github.com:uinaf/tccutil-rs.git
-cd tccutil
+cd tccutil-rs
 cargo build --release
 ```
 
@@ -25,14 +25,21 @@ Read commands work without privileges. Write commands (`grant`, `revoke`, `enabl
 
 ## Validation
 
-One entrypoint runs everything CI runs:
+One entrypoint runs the core gates:
 
 ```sh
 scripts/verify.sh
 ```
 
-It runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` — the same gates as the CI `Verify` job.
+It runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` — what the optional pre-push hook runs.
 
+CI runs the full gate (`cargo llvm-cov` for coverage at 75% line threshold — that also runs the test suite — plus a release build):
+
+```sh
+scripts/verify.sh --full
+```
+
+Locally you can run the same command before opening a PR if you want parity with the CI Verify job.
 Optional pre-push gate that calls the same script:
 
 ```sh

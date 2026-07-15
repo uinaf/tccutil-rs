@@ -43,20 +43,12 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-llvm-cov
 
       - name: Verify
-        run: scripts/verify.sh
-
-      - name: Coverage
-        run: |
-          rustup component add llvm-tools-preview
-          cargo install cargo-llvm-cov --locked
-          cargo llvm-cov --fail-under-lines 75
-
-      - name: Build release
-        run: cargo build --release
+        run: scripts/verify.sh --full
 
   # Push-to-main release. semantic-release decides the next version from
   # Conventional Commits since the last `v*` tag, runs scripts/release-

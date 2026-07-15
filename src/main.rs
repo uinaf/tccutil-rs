@@ -8,18 +8,25 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::{env, process};
 
-use tcc::{DbTarget, SERVICE_MAP, TccDb, TccEntry, TccError, auth_value_display, compact_client};
+use tcc::{
+    DbTarget, ListResult, ListWarning, SERVICE_MAP, TccDb, TccEntry, TccError, WriteResult,
+    auth_value_display, compact_client,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "tccutil-rs", about = "Manage macOS TCC permissions", version)]
 struct Cli {
-    /// Operate on user DB instead of system DB
+    /// Force the per-user TCC database for list/write commands
     #[arg(short, long, global = true)]
     user: bool,
 
     /// Emit machine-readable JSON output
     #[arg(short = 'j', long, global = true)]
     json: bool,
+
+    /// Allow writes against an unrecognized TCC schema digest
+    #[arg(long, global = true)]
+    force: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -339,6 +346,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_force_flag_global() {
+        let cli = parse(&["tcc", "--force", "grant", "Camera", "com.app"]).unwrap();
+        assert!(cli.force);
+    }
+
+    #[test]
     fn parse_json_flag_global() {
         let cli = parse(&["tcc", "--json", "services"]).unwrap();
         assert!(cli.json);
@@ -416,10 +429,15 @@ mod tests {
 
     #[test]
     fn json_message_data_shape() {
-        assert_eq!(json_message_data("done"), "{\"message\":\"done\"}");
+        let result = WriteResult::ok("done".into());
         assert_eq!(
-            json_message_data("with\nnewline"),
-            "{\"message\":\"with\\nnewline\"}"
+            json_message_data(&result),
+            "{\"message\":\"done\",\"warnings\":[]}"
+        );
+        let with_nl = WriteResult::ok("with\nnewline".into());
+        assert_eq!(
+            json_message_data(&with_nl),
+            "{\"message\":\"with\\nnewline\",\"warnings\":[]}"
         );
     }
 
@@ -525,13 +543,29 @@ fn emit_json_error(command: &'static str, kind: &'static str, message: String) {
     ));
 }
 
-fn json_message_data(message: &str) -> String {
-    format!("{{\"message\":{}}}", json_string(message))
+fn json_message_data(result: &WriteResult) -> String {
+    let warnings_json = result
+        .warnings
+        .iter()
+        .map(|w| {
+            format!(
+                "{{\"kind\":{},\"message\":{}}}",
+                json_string(w.kind.as_str()),
+                json_string(&w.message),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{{\"message\":{},\"warnings\":[{}]}}",
+        json_string(&result.message),
+        warnings_json
+    )
 }
 
-fn json_list_data(entries: &[TccEntry], compact: bool) -> String {
-    let mut entry_json = Vec::with_capacity(entries.len());
-    for entry in entries {
+fn json_list_data(result: &ListResult, compact: bool) -> String {
+    let mut entry_json = Vec::with_capacity(result.entries.len());
+    for entry in &result.entries {
         let client = if compact {
             compact_client(&entry.client)
         } else {
@@ -549,10 +583,24 @@ fn json_list_data(entries: &[TccEntry], compact: bool) -> String {
             json_string(&entry.last_modified),
         ));
     }
+    let warnings_json = result
+        .warnings
+        .iter()
+        .map(|w| {
+            format!(
+                "{{\"kind\":{},\"source\":{},\"message\":{}}}",
+                json_string(w.kind.as_str()),
+                json_string(&w.source),
+                json_string(&w.message),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{\"count\":{},\"entries\":[{}]}}",
-        entries.len(),
-        entry_json.join(",")
+        "{{\"count\":{},\"entries\":[{}],\"warnings\":[{}]}}",
+        result.entries.len(),
+        entry_json.join(","),
+        warnings_json
     )
 }
 
@@ -582,20 +630,57 @@ fn json_info_data(lines: &[String]) -> String {
     format!("{{\"lines\":[{}]}}", lines_json)
 }
 
-fn run_command(result: Result<String, TccError>) {
-    match result {
-        Ok(msg) => println!("{}", msg.green()),
-        Err(e) => {
-            eprintln!("{}: {}", "Error".red().bold(), e);
-            process::exit(1);
-        }
+fn make_db(target: DbTarget, force: bool) -> Result<TccDb, TccError> {
+    let mut db = TccDb::new(target)?;
+    db.set_force(force);
+    Ok(db)
+}
+
+fn fail_command(command: &'static str, json_mode: bool, error: TccError) -> ! {
+    if json_mode {
+        emit_json_error(command, error_kind(&error), error.to_string());
+    } else {
+        eprintln!("{}: {}", "Error".red().bold(), error);
+    }
+    process::exit(1);
+}
+
+fn emit_write_warnings_human(result: &WriteResult) {
+    for w in &result.warnings {
+        eprintln!("{}: {}", "Warning".yellow().bold(), w.message);
     }
 }
 
-fn make_db(target: DbTarget, suppress_warnings: bool) -> Result<TccDb, TccError> {
-    let mut db = TccDb::new(target)?;
-    db.set_suppress_warnings(suppress_warnings);
-    Ok(db)
+fn emit_list_warnings_human(warnings: &[ListWarning]) {
+    for w in warnings {
+        eprintln!("{}: {}", "Warning".yellow().bold(), w.message);
+    }
+}
+
+fn run_write_command<F>(
+    command: &'static str,
+    target: DbTarget,
+    json_mode: bool,
+    force: bool,
+    op: F,
+) where
+    F: FnOnce(&TccDb) -> Result<WriteResult, TccError>,
+{
+    let db = match make_db(target, force) {
+        Ok(db) => db,
+        Err(e) => fail_command(command, json_mode, e),
+    };
+    match op(&db) {
+        Ok(result) => {
+            if json_mode {
+                emit_json_success(command, json_message_data(&result));
+            } else {
+                emit_write_warnings_human(&result);
+                println!("{}", result.message.green());
+            }
+        }
+        Err(e) => fail_command(command, json_mode, e),
+    }
 }
 
 fn wants_json_from_args() -> bool {
@@ -621,6 +706,7 @@ fn main() {
         DbTarget::Default
     };
     let json_mode = cli.json;
+    let force = cli.force;
 
     match cli.command {
         Commands::List {
@@ -628,176 +714,53 @@ fn main() {
             service,
             compact,
         } => {
-            let db = match make_db(target, json_mode) {
+            let db = match make_db(target, force) {
                 Ok(db) => db,
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("list", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
+                Err(e) => fail_command("list", json_mode, e),
             };
 
             match db.list(client.as_deref(), service.as_deref()) {
-                Ok(entries) => {
+                Ok(result) => {
                     if json_mode {
-                        emit_json_success("list", json_list_data(&entries, compact));
+                        emit_json_success("list", json_list_data(&result, compact));
                     } else {
-                        print_entries(&entries, compact);
+                        emit_list_warnings_human(&result.warnings);
+                        print_entries(&result.entries, compact);
                     }
                 }
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("list", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
+                Err(e) => fail_command("list", json_mode, e),
             }
         }
         Commands::Grant {
             service,
             client_path,
-        } => {
-            let db = match make_db(target, json_mode) {
-                Ok(db) => db,
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("grant", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
-            };
-            let result = db.grant(&service, &client_path);
-            if json_mode {
-                match result {
-                    Ok(message) => emit_json_success("grant", json_message_data(&message)),
-                    Err(e) => {
-                        emit_json_error("grant", error_kind(&e), e.to_string());
-                        process::exit(1);
-                    }
-                }
-            } else {
-                run_command(result);
-            }
-        }
+        } => run_write_command("grant", target, json_mode, force, |db| {
+            db.grant(&service, &client_path)
+        }),
         Commands::Revoke {
             service,
             client_path,
-        } => {
-            let db = match make_db(target, json_mode) {
-                Ok(db) => db,
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("revoke", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
-            };
-            let result = db.revoke(&service, &client_path);
-            if json_mode {
-                match result {
-                    Ok(message) => emit_json_success("revoke", json_message_data(&message)),
-                    Err(e) => {
-                        emit_json_error("revoke", error_kind(&e), e.to_string());
-                        process::exit(1);
-                    }
-                }
-            } else {
-                run_command(result);
-            }
-        }
+        } => run_write_command("revoke", target, json_mode, force, |db| {
+            db.revoke(&service, &client_path)
+        }),
         Commands::Enable {
             service,
             client_path,
-        } => {
-            let db = match make_db(target, json_mode) {
-                Ok(db) => db,
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("enable", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
-            };
-            let result = db.enable(&service, &client_path);
-            if json_mode {
-                match result {
-                    Ok(message) => emit_json_success("enable", json_message_data(&message)),
-                    Err(e) => {
-                        emit_json_error("enable", error_kind(&e), e.to_string());
-                        process::exit(1);
-                    }
-                }
-            } else {
-                run_command(result);
-            }
-        }
+        } => run_write_command("enable", target, json_mode, force, |db| {
+            db.enable(&service, &client_path)
+        }),
         Commands::Disable {
             service,
             client_path,
-        } => {
-            let db = match make_db(target, json_mode) {
-                Ok(db) => db,
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("disable", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
-            };
-            let result = db.disable(&service, &client_path);
-            if json_mode {
-                match result {
-                    Ok(message) => emit_json_success("disable", json_message_data(&message)),
-                    Err(e) => {
-                        emit_json_error("disable", error_kind(&e), e.to_string());
-                        process::exit(1);
-                    }
-                }
-            } else {
-                run_command(result);
-            }
-        }
+        } => run_write_command("disable", target, json_mode, force, |db| {
+            db.disable(&service, &client_path)
+        }),
         Commands::Reset {
             service,
             client_path,
-        } => {
-            let db = match make_db(target, json_mode) {
-                Ok(db) => db,
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("reset", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
-            };
-            let result = db.reset(&service, client_path.as_deref());
-            if json_mode {
-                match result {
-                    Ok(message) => emit_json_success("reset", json_message_data(&message)),
-                    Err(e) => {
-                        emit_json_error("reset", error_kind(&e), e.to_string());
-                        process::exit(1);
-                    }
-                }
-            } else {
-                run_command(result);
-            }
-        }
+        } => run_write_command("reset", target, json_mode, force, |db| {
+            db.reset(&service, client_path.as_deref())
+        }),
         Commands::Services => {
             if json_mode {
                 emit_json_success("services", json_services_data());
@@ -830,16 +793,9 @@ fn main() {
             }
         }
         Commands::Info => {
-            let db = match make_db(target, json_mode) {
+            let db = match make_db(target, force) {
                 Ok(db) => db,
-                Err(e) => {
-                    if json_mode {
-                        emit_json_error("info", error_kind(&e), e.to_string());
-                    } else {
-                        eprintln!("{}: {}", "Error".red().bold(), e);
-                    }
-                    process::exit(1);
-                }
+                Err(e) => fail_command("info", json_mode, e),
             };
 
             let lines = db.info();

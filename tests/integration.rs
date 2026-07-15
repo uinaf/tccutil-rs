@@ -176,7 +176,24 @@ fn list_json_mode_returns_valid_json() {
     assert!(stdout.contains("\"command\":\"list\""));
     assert!(stdout.contains("\"data\":{\"count\":"));
     assert!(stdout.contains("\"entries\":["));
+    assert!(stdout.contains("\"warnings\":["));
     assert!(stdout.contains("\"error\":null"));
+}
+
+#[test]
+fn grant_json_force_unknown_service_still_errors() {
+    // Sanity: unknown service fails before schema; envelope stays structured.
+    let (stdout, stderr, success) = run_tcc(&[
+        "grant",
+        "DefinitelyNotARealService",
+        "com.example.app",
+        "--json",
+        "--force",
+    ]);
+    assert!(!success);
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("\"ok\":false"));
+    assert!(stdout.contains("\"kind\":\"UnknownService\""));
 }
 
 #[test]
