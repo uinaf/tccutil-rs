@@ -50,6 +50,9 @@ jobs:
       - name: Verify
         run: make verify-full
 
+      - name: Require an unchanged lockfile
+        run: git diff --exit-code -- Cargo.lock
+
   # Push-to-main release. semantic-release decides the next version from
   # Conventional Commits since the last `v*` tag and creates a draft GitHub
   # Release. We build and
