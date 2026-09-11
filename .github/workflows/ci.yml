@@ -21,7 +21,6 @@ jobs:
     # through (no `head_commit` on pull_request events; gating on event_name
     # avoids the null-deref that would otherwise prevent the job scheduling).
     if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]') }}
-    name: Verify
     runs-on: macos-26
     permissions:
       contents: read
