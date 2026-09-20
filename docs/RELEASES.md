@@ -16,7 +16,7 @@ Conventional Commits drive the bump (see `.releaserc.json`):
 ## Pipeline
 
 1. `verify` runs with read-only credentials
-2. Protected `release` Environment mints a short-lived `uinaf-releaser` installation token scoped to `tccutil-rs`
+2. Protected `release` Environment mints a short-lived `uinaf-ci` installation token scoped to `tccutil-rs`
 3. `semantic-release` prepares the Cargo files, commits them through GitHub's
    signed App commit API, then creates the version tag and a mutable draft
    GitHub Release; exact-tag lookup fails if the expected Release is unavailable
@@ -35,5 +35,5 @@ Sources of truth: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`.
 
 | Name | Kind |
 |---|---|
-| `UINAF_RELEASE_APP_CLIENT_ID` | variable |
-| `UINAF_RELEASE_APP_PRIVATE_KEY` | secret |
+| `UINAF_CI_APP_CLIENT_ID` | variable |
+| `UINAF_CI_APP_PRIVATE_KEY` | secret |

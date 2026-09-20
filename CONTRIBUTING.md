@@ -64,7 +64,7 @@ After install, every `git push` runs `make verify` and fails the push if anythin
 Use Conventional Commits (`feat:`, `fix:`, `docs:`, …); they drive versions.
 
 Successful pushes to protected `main` evaluate commits after `verify` passes.
-The release job mints a short-lived `uinaf-releaser` token inside the
+The release job mints a short-lived `uinaf-ci` token inside the
 `release` Environment, publishes the GitHub Release and darwin archives, then
 updates the Homebrew formula. See [Releases](docs/RELEASES.md).
 
