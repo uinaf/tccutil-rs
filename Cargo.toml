@@ -7,7 +7,6 @@ license = "MIT"
 repository = "https://github.com/uinaf/tccutil-rs"
 homepage = "https://github.com/uinaf/tccutil-rs"
 readme = "README.md"
-# Binary crate, not intended for crates.io.
 publish = false
 
 [[bin]]

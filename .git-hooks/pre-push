@@ -1,4 +1,2 @@
 #!/usr/bin/env bash
-# Pre-push gate: defers to Make so CI and local share one source of truth.
-# Install: scripts/setup-hooks.sh
 exec make --no-print-directory -C "$(git rev-parse --show-toplevel)" verify
