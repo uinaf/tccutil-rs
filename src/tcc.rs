@@ -483,7 +483,6 @@ impl TccDb {
         )
     }
 
-    /// Determine the target DB path for a write operation
     fn write_db_path(&self, service_key: &str) -> &Path {
         match self.target {
             DbTarget::User => &self.user_db_path,
@@ -572,7 +571,6 @@ impl TccDb {
         }
     }
 
-    /// Open a writable connection with schema validation
     fn open_writable(&self, service_key: &str) -> Result<(Connection, Option<String>), TccError> {
         let db_path = self.write_db_path(service_key);
         let conn = Connection::open(db_path).map_err(|e| TccError::DbOpen {
@@ -834,11 +832,9 @@ impl TccDb {
             }
         }
 
-        // Paths we will actually mutate (skip live system DB when non-root and empty).
         let mut mutate: Vec<(&Path, &str)> = Vec::new();
         for (db_path, label) in existing_paths {
             if Self::path_requires_root(db_path) {
-                // Confirmed zero matching system rows above; skip quietly.
                 continue;
             }
             mutate.push((db_path, label));
@@ -851,7 +847,6 @@ impl TccDb {
             )));
         }
 
-        // Validate schemas up front (and collect --force warnings) before any DELETE.
         let mut schema_warnings: Vec<WriteWarning> = Vec::new();
         for (db_path, label) in &mutate {
             let conn = Connection::open(db_path).map_err(|e| TccError::DbOpen {
@@ -887,9 +882,6 @@ impl TccDb {
             )
             .map_err(|e| TccError::WriteFailed(format!("Failed to reset {} DB: {}", label, e)))?
         } else {
-            // Cross-DB delete in one transaction so a statement failure rolls
-            // back both sides. (WAL crash-atomicity across ATTACH is not
-            // guaranteed by SQLite; we only rely on statement-level rollback.)
             let (primary_path, primary_label) = mutate[0];
             let (secondary_path, secondary_label) = mutate[1];
             let conn = Connection::open(primary_path).map_err(|e| TccError::DbOpen {
@@ -976,7 +968,6 @@ impl TccDb {
 
         lines.push(String::new());
 
-        // DB info
         for (label, path) in [
             ("User DB", &self.user_db_path),
             ("System DB", &self.system_db_path),
@@ -996,7 +987,6 @@ impl TccDb {
                     if writable { "yes" } else { "no" }
                 ));
 
-                // Schema digest
                 if readable
                     && let Ok(conn) =
                         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -1042,7 +1032,6 @@ pub fn compact_client(client: &str) -> String {
     }
 }
 
-/// Map auth_value to a display string
 pub fn auth_value_display(value: i32) -> String {
     match value {
         0 => "denied".to_string(),
@@ -1080,7 +1069,6 @@ mod tests {
 
     #[test]
     fn unknown_service_key_with_prefix_strips_prefix() {
-        // Unknown key with kTCCService prefix should strip the prefix
         assert_eq!(
             TccDb::service_display_name("kTCCServiceSomethingNew"),
             "SomethingNew"
@@ -1089,7 +1077,6 @@ mod tests {
 
     #[test]
     fn unknown_service_key_without_prefix_returns_raw() {
-        // Key without the standard prefix returns as-is
         assert_eq!(
             TccDb::service_display_name("com.example.custom"),
             "com.example.custom"
@@ -1151,8 +1138,6 @@ mod tests {
 
     #[test]
     fn db_open_unable_to_open_on_tcc_path_includes_fda_hint() {
-        // Real-world case: SQLite reports "unable to open database file" when
-        // FDA blocks the process. The hint must fire here.
         let err = TccError::DbOpen {
             path: PathBuf::from("/Library/Application Support/com.apple.TCC/TCC.db"),
             source:
@@ -1192,7 +1177,6 @@ mod tests {
 
     #[test]
     fn compact_client_root_path() {
-        // Edge case: root path "/"
         assert_eq!(compact_client("/"), "/");
     }
 
@@ -1410,7 +1394,6 @@ mod tests {
     #[test]
     fn resolve_ambiguous_errors() {
         let db = make_test_db();
-        // "Photo" matches both "Photos" and "Photos (Add Only)"
         let err = db.resolve_service_name("Photo").unwrap_err();
         assert!(
             matches!(err, TccError::AmbiguousService { .. }),

@@ -397,7 +397,6 @@ mod tests {
 
     #[test]
     fn json_escape_emits_unicode_for_other_control_chars() {
-        // U+0001 isn't in the named-escape list; it should be \u-encoded.
         assert_eq!(json_escape("\u{01}"), "\\u0001");
     }
 
